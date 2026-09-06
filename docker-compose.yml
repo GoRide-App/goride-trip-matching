@@ -1,0 +1,21 @@
+# Local dev: runs this service in a container, connecting OUT to the shared Azure
+# MySQL server (not a local database) — matching how staging/production work.
+# Secrets come from a git-ignored .env file — copy .env.example to .env and fill
+# in real values before running `docker compose up`.
+services:
+  service-api:
+    build: .
+    container_name: goride-trip-api
+    ports:
+      - "8080:8080"
+    environment:
+      Db__Host: ${DB_HOST}
+      Db__Port: ${DB_PORT}
+      Db__Database: ${DB_DATABASE}
+      Db__User: ${DB_USER}
+      Db__Password: ${DB_PASSWORD}
+      Db__SslMode: Required
+      Cors__AllowedOrigins__0: ${FRONTEND_URL_LOCAL}
+      Cors__AllowedOrigins__1: ${FRONTEND_URL_PROD}
+    env_file:
+      - .env

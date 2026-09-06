@@ -1,0 +1,15 @@
+# Build output
+bin/
+obj/
+*.user
+.vs/
+.vscode/*
+!.vscode/extensions.json
+
+# Secrets — never commit these
+appsettings.Development.json
+.env
+
+# OS noise
+.DS_Store
+Thumbs.db

@@ -1,0 +1,10 @@
+bin/
+obj/
+tests/
+.git/
+.github/
+.vs/
+.vscode/
+.env
+appsettings.Development.json
+*.md

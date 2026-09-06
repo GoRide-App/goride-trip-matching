@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, dev ]
+  pull_request:
+    branches: [ main, dev ]
+
+jobs:
+  build-test-docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore
+        run: dotnet restore GoRide.Trip.sln
+
+      - name: Build
+        run: dotnet build GoRide.Trip.sln --no-restore --configuration Release
+
+      - name: Test
+        run: dotnet test GoRide.Trip.sln --no-build --configuration Release
+
+      - name: Build Docker image
+        run: docker build -t goride-Trip:ci .
+
+      # Note: this is a self-contained starter workflow. Once goride-infra's shared
+      # reusable workflow exists (see the polyrepo CI/CD plan), replace this file's
+      # contents with a short `uses: goride/goride-infra/.github/workflows/...`
+      # call instead, per that plan — keeps every service's pipeline consistent.
