@@ -1,4 +1,5 @@
 using GoRide.Trip.Data;
+using GoRide.Trip.Events;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -9,6 +10,9 @@ builder.Services.AddSwaggerGen();
 
 // ---- Database (ADO.NET connection factory — see Data/MySqlConnectionFactory.cs) ----
 builder.Services.AddScoped<IDbConnectionFactory, MySqlConnectionFactory>();
+
+// ---- Kafka producer service (singleton) ----
+builder.Services.AddSingleton<KafkaProducerService>();  // One shared Kafka connection for the whole app's lifetime, not a new one per request.
 
 // ---- CORS: allow the Next.js frontend (local dev + Vercel-hosted) to call this API ----
 var allowedOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>()

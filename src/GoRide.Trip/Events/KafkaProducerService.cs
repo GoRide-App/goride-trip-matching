@@ -1,0 +1,26 @@
+using Confluent.Kafka; // confluent is a popular .NET client for Apache Kafka
+using System.Collections.Concurrent;
+using System.Text.Json;  // using GoRide.Trip.Events; // import the namespace for the event classes // namespase means
+
+
+namespace GoRide.Trip.Events;   // GoRide.TripMatching.Events namespace 
+
+public class KafkaProducerService : IDisposable {  // IDisposable interface, which is a common pattern in .NET for managing resources that require explicit cleanup, such as file handles, database connections, or network connections. By implementing IDisposable, the KafkaProducerService class is indicating that it has resources that need to be released when the object is no longer needed. This typically involves overriding the Dispose method, where you would include the logic to free up any unmanaged resources or perform other cleanup tasks. The IDisposable interface is crucial for ensuring that resources are properly managed and that memory leaks are avoided.
+    private readonly IProducer<string, string> _producer;  // IProducer is an interface provided by the Confluent.Kafka library that represents a Kafka producer. It defines the methods and properties that a Kafka producer must implement to send messages to Kafka topics. The generic parameters <string, string> indicate that the key and value of the messages being produced are both of type string. 
+
+    public KafkaProducerService(IConfiguration config) { // KafkaProducerService method is a constructor for the KafkaProducerService class. It takes an IConfiguration object as a parameter, which is typically used to access configuration settings in a .NET application. The constructor is responsible for initializing the Kafka producer with the necessary configuration settings, such as the Kafka broker addresses and other options. This allows the KafkaProducerService to be properly configured and ready to send messages to Kafka topics when it is instantiated.
+        var producerConfig = new ProducerConfig { // ProducerConfig is method provided by the Confluent.Kafka library that represents the configuration settings for a Kafka producer. It allows you to specify various properties that control the behavior of the producer, such as the Kafka broker addresses, security settings, and other options. In this case, a new instance of ProducerConfig is being created and initialized with specific settings.
+            
+                BootstrapServers = config["Kafka:BootstrapServers"] // BootstrapServers is a property of the ProducerConfig class that specifies the Kafka broker addresses that the producer will connect to. In this case, it is being set to the value retrieved from the configuration using the key "Kafka:BootstrapServers". This allows the producer to know where to send messages in the Kafka cluster.
+
+        };
+        _producer = new ProducerBuilder<string, string>(producerConfig).Build(); // ProducerBuilder is a class provided by the Confluent.Kafka library that is used to create instances of Kafka producers. It takes a configuration object (in this case, ProducerConfig) as a parameter and provides methods to customize the producer's behavior. The Build() method is called to create an instance of the producer based on the specified configuration.
+    }
+
+    public async Task PublishAsync<T>(string topic, string key, T eventPayload) { // PublishAsync method is a generic asynchronous method that allows you to publish messages to a specified Kafka topic. It takes three parameters: the topic name (string), the key for the message (string), and the event payload (of type T, which can be any type). The method is marked as async, indicating that it can perform asynchronous operations, such as sending messages to Kafka without blocking the calling thread. This is useful for improving performance and responsiveness in applications that need to handle high-throughput messaging scenarios.
+        var json = JsonSerializer.Serialize(eventPayload); // JsonSerializer.Serialize is a method provided by the System.Text.Json namespace in .NET that converts an object (in this case, eventPayload) into its JSON representation as a string. This is useful for sending structured data over the network or storing it in a format that can be easily consumed by other systems.
+        await _producer.ProduceAsync(topic, new Message<string, string> { Key = key, Value = json }); // ProduceAsync is an asynchronous method provided by the Confluent.Kafka library that sends a message to a specified Kafka topic. It takes two parameters: the topic name and a Message object that contains the key and value of the message being sent. In this case, the key is set to the provided key parameter, and the value is set to the JSON representation of the eventPayload.
+    }
+
+    public void Dispose() => _producer.Dispose(); // Dispose the producer when the KafkaProducerService is disposed. This ensures that any resources held by the producer are released properly, preventing resource leaks and ensuring that the application cleans up after itself when it is done using the Kafka producer.
+}
