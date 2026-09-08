@@ -85,3 +85,4 @@ $ sleep 2 && curl -s -X POST http://localhost:8080/fare/estimate \
   -d '{"startLat": 6.9344, "startLng": 79.8428, "endLat": 6.8905, "endLng": 79.8565}' \
   -w "\nHTTP_STATUS:%{http_code}\n"
 
+---------------------------------------------------
