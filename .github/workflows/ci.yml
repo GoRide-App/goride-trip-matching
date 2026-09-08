@@ -27,7 +27,7 @@ jobs:
         run: dotnet test GoRide.Trip.sln --no-build --configuration Release
 
       - name: Build Docker image
-        run: docker build -t goride-Trip:ci .
+        run: docker build -t goride-trip:ci .
 
       # Note: this is a self-contained starter workflow. Once goride-infra's shared
       # reusable workflow exists (see the polyrepo CI/CD plan), replace this file's
