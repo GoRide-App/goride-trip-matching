@@ -18,16 +18,16 @@ jobs:
           dotnet-version: '10.0.x'
 
       - name: Restore
-        run: dotnet restore GoRide.Trip.sln
+        run: dotnet restore GoRide.trip.sln
 
       - name: Build
-        run: dotnet build GoRide.Trip.sln --no-restore --configuration Release
+        run: dotnet build GoRide.trip.sln --no-restore --configuration Release
 
       - name: Test
-        run: dotnet test GoRide.Trip.sln --no-build --configuration Release
+        run: dotnet test GoRide.trip.sln --no-build --configuration Release
 
       - name: Build Docker image
-        run: docker build -t goride-Trip:ci .
+        run: docker build -t goride-trip:ci .
 
       # Note: this is a self-contained starter workflow. Once goride-infra's shared
       # reusable workflow exists (see the polyrepo CI/CD plan), replace this file's
