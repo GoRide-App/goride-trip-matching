@@ -75,3 +75,14 @@ Only once all of that is green do you start on the service's first real Sprint s
 ## Why the frontend origin is configuration, not hardcoded
 
 `Cors:AllowedOrigins` in `appsettings.json` lists which frontend URLs may call this API. Locally that's `http://localhost:3000` (Next.js dev server); in production it's your Vercel deployment URL. Update the placeholder once your frontend actually has a Vercel URL — until then, local development works fine with just `localhost:3000`.
+
+
+---------------------------------------------------
+docker compose up --build -d
+
+$ sleep 2 && curl -s -X POST http://localhost:8080/fare/estimate \
+  -H "Content-Type: application/json" \
+  -d '{"startLat": 6.9344, "startLng": 79.8428, "endLat": 6.8905, "endLng": 79.8565}' \
+  -w "\nHTTP_STATUS:%{http_code}\n"
+
+---------------------------------------------------

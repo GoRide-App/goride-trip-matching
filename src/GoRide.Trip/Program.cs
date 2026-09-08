@@ -1,5 +1,6 @@
 using GoRide.Trip.Data;
 using GoRide.Trip.Events;
+using GoRide.Trip.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -7,6 +8,8 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
+builder.Services.AddScoped<IVehicleTypeRepository, VehicleTypeRepository>();
+builder.Services.AddScoped<IFareCalculationService, FareCalculationService>();
 
 // ---- Database (ADO.NET connection factory — see Data/MySqlConnectionFactory.cs) ----
 builder.Services.AddScoped<IDbConnectionFactory, MySqlConnectionFactory>();
