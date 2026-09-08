@@ -15,6 +15,13 @@ public class FareCalculationService : IFareCalculationService
 
     private readonly IVehicleTypeRepository _vehicleTypeRepository;
 
+    private static readonly (string Id, string Code, decimal BaseFare, decimal RatePerKm, decimal RatePerMin)[] AdditionalDisplayTypes = new[]
+    {
+        ("vt_car", "CAR", 300m, 120m, 10m),
+        ("vt_bike", "BIKE", 100m, 50m, 5m),
+        ("vt_xl", "XL", 500m, 180m, 15m),
+    };
+
     public FareCalculationService(IVehicleTypeRepository vehicleTypeRepository)
     {
         _vehicleTypeRepository = vehicleTypeRepository;
@@ -34,23 +41,63 @@ public class FareCalculationService : IFareCalculationService
                 + ((decimal)distanceKm * vehicleType.RatePerKm)
                 + ((decimal)durationMinutes * vehicleType.RatePerMin);
 
+            bool isTukTuk = string.Equals(vehicleType.Code, "TUKTUK", StringComparison.OrdinalIgnoreCase) ||
+                            string.Equals(vehicleType.Code, "TUK", StringComparison.OrdinalIgnoreCase);
+
             options.Add(new FareOption
             {
                 VehicleTypeId = vehicleType.Id,
                 VehicleTypeCode = vehicleType.Code,
-                Available = vehicleType.Active,
+                DisplayName = GetDisplayName(vehicleType.Code),
+                // Only TUKTUK is allowed to be selected by riders in this stage
+                Available = isTukTuk && vehicleType.Active,
                 Fare = Math.Round(fare, 2),
                 DistanceKm = Math.Round(distanceKm, 2),
                 EstimatedDurationMinutes = Math.Round(durationMinutes, 1),
             });
         }
 
+        // If other vehicle types (CAR, BIKE, XL) are not in the database yet, add them for display only
+        foreach (var fallback in AdditionalDisplayTypes)
+        {
+            if (!options.Any(o => string.Equals(o.VehicleTypeCode, fallback.Code, StringComparison.OrdinalIgnoreCase)))
+            {
+                decimal fare = fallback.BaseFare
+                    + ((decimal)distanceKm * fallback.RatePerKm)
+                    + ((decimal)durationMinutes * fallback.RatePerMin);
+
+                options.Add(new FareOption
+                {
+                    VehicleTypeId = fallback.Id,
+                    VehicleTypeCode = fallback.Code,
+                    DisplayName = GetDisplayName(fallback.Code),
+                    Available = false, // Display only, cannot be selected by the rider
+                    Fare = Math.Round(fare, 2),
+                    DistanceKm = Math.Round(distanceKm, 2),
+                    EstimatedDurationMinutes = Math.Round(durationMinutes, 1),
+                });
+            }
+        }
+
         return options;
     }
 
+    /// <summary>
+    /// Maps internal vehicle type codes to human-readable display names shown in the frontend.
+    /// TUKTUK is mapped to "Tuk Tuk". Others are mapped to their respective display names.
+    /// No database or remote connection changes are made here; this is pure application logic.
+    /// </summary>
+    private static string GetDisplayName(string code) => code.ToUpperInvariant() switch
+    {
+        "TUKTUK" => "Tuk Tuk",
+        "TUK"    => "Tuk Tuk",
+        "CAR"    => "Car",
+        "BIKE"   => "Bike",
+        "XL"     => "XL",
+        _        => code,
+    };
+
     // Haversine formula: great-circle (straight-line) distance between two lat/lng points.
-    // Deliberately not real road distance — no routing provider exists yet, and for a
-    // TukTuk-only, single-city fixed fare, this is a defensible, honest approximation.
     private static double CalculateDistanceKm(double lat1, double lng1, double lat2, double lng2)
     {
         double dLat = ToRadians(lat2 - lat1);
