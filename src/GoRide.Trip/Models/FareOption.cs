@@ -10,5 +10,6 @@ public class FareOption
     public decimal Fare { get; set; }
     public double DistanceKm { get; set; }
     public double EstimatedDurationMinutes { get; set; }
+    // public decimal EstimatedFare { get; set; }
 }
 
