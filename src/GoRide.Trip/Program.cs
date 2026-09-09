@@ -14,6 +14,14 @@ builder.Services.AddScoped<IFareCalculationService, FareCalculationService>();
 // ---- Database (ADO.NET connection factory — see Data/MySqlConnectionFactory.cs) ----
 builder.Services.AddScoped<IDbConnectionFactory, MySqlConnectionFactory>();
 
+// ---- identity-auth client (for listing active drivers — see Services/ActiveDriversService.cs) ----
+// builder.Services.AddHttpClient<IActiveDriversService, ActiveDriversService>(client =>
+// {
+//     var identityAuthUrl = builder.Configuration["IdentityAuth:BaseUrl"]
+//         ?? throw new InvalidOperationException("Missing configuration: IdentityAuth:BaseUrl");
+//     client.BaseAddress = new Uri(identityAuthUrl);
+// });
+
 // ---- Kafka producer service (singleton) ----
 builder.Services.AddSingleton<KafkaProducerService>();  // One shared Kafka connection for the whole app's lifetime, not a new one per request.
 
