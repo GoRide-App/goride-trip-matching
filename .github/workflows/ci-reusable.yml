@@ -15,6 +15,13 @@ env:
   DOTNET_CLI_TELEMETRY_OPTOUT: "true"
   DOTNET_SKIP_FIRST_TIME_EXPERIENCE: "true"
 
+# Explicit bash = `bash -eo pipefail`. Without this, GitHub runs steps as plain
+# `bash -e`, so `dotnet build ... | tee` would return tee's exit code and a failed
+# build/format check could slip through as green.
+defaults:
+  run:
+    shell: bash
+
 jobs:
   build-test:
     name: Build & Test

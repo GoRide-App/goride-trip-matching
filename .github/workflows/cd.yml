@@ -28,6 +28,11 @@ env:
   RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
   CONTAINER_APP_NAME: ${{ vars.AZURE_CONTAINERAPP_NAME }}
 
+# Same reason as in ci-reusable.yml: explicit bash gives us pipefail.
+defaults:
+  run:
+    shell: bash
+
 jobs:
   # 1. Same checks as a PR. Nothing gets built for Azure if these fail.
   ci:
