@@ -1,35 +1,24 @@
 name: CI
 
+# Runs on every PR into dev/main and on direct pushes to those branches.
+# The actual steps live in ci-reusable.yml so cd.yml can run the exact same
+# checks before it deploys anything.
 on:
-  push:
-    branches: [ main, dev ]
   pull_request:
-    branches: [ main, dev ]
+    branches: [dev, main]
+  push:
+    branches: [dev, main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A new push to the same PR cancels the run that is still going.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  build-test-docker:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: '10.0.x'
-
-      - name: Restore
-        run: dotnet restore GoRide.Trip.sln
-
-      - name: Build
-        run: dotnet build GoRide.Trip.sln --no-restore --configuration Release
-
-      - name: Test
-        run: dotnet test GoRide.Trip.sln --no-build --configuration Release
-
-      - name: Build Docker image
-        run: docker build -t goride-trip:ci .
-
-      # Note: this is a self-contained starter workflow. Once goride-infra's shared
-      # reusable workflow exists (see the polyrepo CI/CD plan), replace this file's
-      # contents with a short `uses: goride/goride-infra/.github/workflows/...`
-      # call instead, per that plan — keeps every service's pipeline consistent.
+  ci:
+    name: CI
+    uses: ./.github/workflows/ci-reusable.yml
