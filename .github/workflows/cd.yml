@@ -1,0 +1,117 @@
+name: CD
+
+# Deploys this service to Azure Container Apps on every push to dev.
+# Flow: full CI -> build image -> push to ACR -> update the container app -> hit /health.
+#
+# It does nothing until the repo variable CD_ENABLED is set to "true". Before
+# flipping that, the Azure side has to exist (see README, "CI/CD"):
+#   - a federated credential on the GitHub OIDC app for this repo's dev branch
+#   - the container app created once by hand
+#   - Db__Password (secret), CORS and Kafka env vars set on the container app
+on:
+  push:
+    branches: [dev]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write # OIDC login to Azure — no password stored in GitHub
+
+concurrency:
+  group: cd-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  IMAGE_NAME: goride-trip-matching
+  ACR_NAME: ${{ vars.ACR_NAME }}
+  ACR_LOGIN_SERVER: ${{ vars.ACR_LOGIN_SERVER }}
+  RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+  CONTAINER_APP_NAME: ${{ vars.AZURE_CONTAINERAPP_NAME }}
+
+jobs:
+  # 1. Same checks as a PR. Nothing gets built for Azure if these fail.
+  ci:
+    name: CI
+    uses: ./.github/workflows/ci-reusable.yml
+    permissions:
+      contents: read
+
+  # 2. Build the image and push it to the shared registry, tagged with the commit SHA.
+  image:
+    name: Build & Push Image
+    runs-on: ubuntu-latest
+    needs: ci
+    if: vars.CD_ENABLED == 'true'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Log in to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Log in to ACR
+        run: az acr login --name "$ACR_NAME"
+
+      - name: Build image
+        run: |
+          docker build \
+            -t "$ACR_LOGIN_SERVER/$IMAGE_NAME:${{ github.sha }}" \
+            -t "$ACR_LOGIN_SERVER/$IMAGE_NAME:dev" \
+            .
+
+      - name: Push image
+        run: |
+          docker push "$ACR_LOGIN_SERVER/$IMAGE_NAME:${{ github.sha }}"
+          docker push "$ACR_LOGIN_SERVER/$IMAGE_NAME:dev"
+
+  # 3. Point the container app at the new image and check it actually comes up.
+  deploy:
+    name: Deploy to Azure Container Apps
+    runs-on: ubuntu-latest
+    needs: image
+    steps:
+      - name: Log in to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy image
+        run: |
+          az containerapp update \
+            --name "$CONTAINER_APP_NAME" \
+            --resource-group "$RESOURCE_GROUP" \
+            --image "$ACR_LOGIN_SERVER/$IMAGE_NAME:${{ github.sha }}" \
+            --set-env-vars ASPNETCORE_ENVIRONMENT=Production
+
+      - name: Check /health
+        run: |
+          FQDN=$(az containerapp show \
+            --name "$CONTAINER_APP_NAME" \
+            --resource-group "$RESOURCE_GROUP" \
+            --query "properties.configuration.ingress.fqdn" -o tsv)
+          echo "Checking https://$FQDN/health"
+          for i in $(seq 1 12); do
+            if curl -fsS "https://$FQDN/health"; then
+              echo
+              echo "Service is healthy."
+              exit 0
+            fi
+            echo "not ready yet ($i/12), waiting 10s..."
+            sleep 10
+          done
+          echo "::error title=Deploy unhealthy::/health did not return 200 within 2 minutes."
+          exit 1
+
+      - name: Deployment summary
+        run: |
+          {
+            echo "## Deployment"
+            echo ""
+            echo "Deployed \`$ACR_LOGIN_SERVER/$IMAGE_NAME:${{ github.sha }}\` to **$CONTAINER_APP_NAME**."
+          } >> "$GITHUB_STEP_SUMMARY"
