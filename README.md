@@ -87,7 +87,7 @@ CodeRabbit config is in `.coderabbit.yaml`. Note it reviews PRs into `dev` becau
 `cd.yml` skips the deploy until the repo variable `CD_ENABLED` is `true`. Before flipping it:
 
 1. Add a federated credential on the Azure app registration (`AZURE_CLIENT_ID`) with subject `repo:GoRide-App/goride-trip-matching:ref:refs/heads/dev`. Without it the Azure login step fails.
-2. Create the container app once by hand in `goride-rg` / `goride-env`, named whatever `AZURE_CONTAINERAPP_NAME` is (`goride-trip-matching`), target port 8080, pulling from the ACR. **Don't reuse `goride-api` — that's identity-auth.**
+2. Create the container app once by hand in `goride-rg` / `goride-env`, named whatever `AZURE_CONTAINERAPP_NAME` is (`goride-trip-matching`), target port 8080, **external** HTTP ingress (the deploy job calls `/health` from a GitHub runner, so internal-only ingress would fail it), pulling from the ACR. **Don't reuse `goride-api` — that's identity-auth.**
 3. On the container app set `Db__Password` (as a secret), `Cors__AllowedOrigins__1` (the real Vercel URL) and `Kafka__BootstrapServers`.
 4. Settings → Secrets and variables → Actions → Variables → set `CD_ENABLED` = `true`. The next push to `dev` deploys.
 
