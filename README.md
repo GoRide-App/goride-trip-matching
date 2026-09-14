@@ -111,7 +111,7 @@ Our Azure for Students subscription only allows Container Apps **Express** envir
    | `AZURE_CONTAINERAPP_NAME` | `goride-trip-matching` |
    | `CD_ENABLED` | `true` (set this last) |
 
-Then push to `dev`, or run **CD** from the Actions tab. If `/health` returns 500 "unhealthy", the app is running but can't reach MySQL, so check the `db-password` secret.
+Then push to `dev`, or run **CD** from the Actions tab with the `dev` branch selected (Azure only trusts logins from `dev`). If `/health` returns 500 "unhealthy", the app is running but can't reach MySQL, so check the `db-password` secret.
 
 ### Formatting
 
