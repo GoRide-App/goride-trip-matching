@@ -1,7 +1,7 @@
 {
   "info": {
-    "name": "GoRide Trip Matching — Fare & Drivers",
-    "description": "Regression pack for goride-trip-matching. Covers all three HTTP endpoints found in the controllers: /health, POST /fare/estimate (SCRUM-54), and GET /drivers/active. No auth header required on any of them — none of these controllers carry an [Authorize] attribute. baseUrl defaults to http://localhost:8080 (the Docker Compose port you already confirmed working) — change it to match your dotnet run launch profile if running outside Docker.",
+    "name": "GoRide Trip Matching — Fare Estimate",
+    "description": "Sprint 2 QA pack for goride-trip-matching, scoped to SCRUM-54 (fare estimation) only. Active Drivers (/drivers/active) is intentionally excluded — that story isn't in this sprint's scope, so it isn't reported on here even though the endpoint exists in the codebase. Covers /health and POST /fare/estimate. No auth header required — neither controller carries an [Authorize] attribute. baseUrl defaults to http://localhost:8080, matching both docker-compose.yml and goride-dev.ps1's local dev port for trip-matching.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
@@ -119,42 +119,6 @@
             "listen": "test",
             "script": { "type": "text/javascript", "exec": [
               "pm.test('Status code is 200 — FareCalculationService has no lat/lng range validation, so this documents current behaviour rather than asserting it is correct', () => pm.response.to.have.status(200));"
-            ]}
-          }]
-        }
-      ]
-    },
-    {
-      "name": "Active Drivers",
-      "item": [
-        {
-          "name": "Get active drivers — no vehicleType filter",
-          "request": {
-            "method": "GET",
-            "header": [],
-            "url": { "raw": "{{baseUrl}}/drivers/active", "host": ["{{baseUrl}}"], "path": ["drivers","active"] }
-          },
-          "event": [{
-            "listen": "test",
-            "script": { "type": "text/javascript", "exec": [
-              "// This proxies to identity-auth's internal endpoint and needs InternalServices:ApiKey",
-              "// configured on both services plus identity-auth actually running — I haven't verified",
-              "// that's wired up locally, so this only asserts the route itself exists rather than a 200.",
-              "pm.test('Route exists (not a 404)', () => pm.expect(pm.response.code).to.not.equal(404));"
-            ]}
-          }]
-        },
-        {
-          "name": "Get active drivers — filtered by vehicleType=TUK",
-          "request": {
-            "method": "GET",
-            "header": [],
-            "url": { "raw": "{{baseUrl}}/drivers/active?vehicleType=TUK", "host": ["{{baseUrl}}"], "path": ["drivers","active"], "query": [{ "key": "vehicleType", "value": "TUK" }] }
-          },
-          "event": [{
-            "listen": "test",
-            "script": { "type": "text/javascript", "exec": [
-              "pm.test('Route exists (not a 404)', () => pm.expect(pm.response.code).to.not.equal(404));"
             ]}
           }]
         }
