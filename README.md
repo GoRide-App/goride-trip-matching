@@ -86,7 +86,7 @@ CodeRabbit reads `.coderabbit.yaml`. Its `base_branches: ["dev"]` line is what m
 
 ### Why images go to GHCR, not the Azure registry
 
-Our Azure for Students subscription only allows Container Apps **Express** environments, and Express apps can't log in to a private registry: Azure silently drops the registry login. So CD publishes the image as a **public** GitHub package and Azure pulls it without credentials. The image has nothing secret in it. It's built from a clean checkout, and passwords are set on the container app as secrets. Express doesn't support Key Vault references either.
+Our Azure for Students subscription only allows Container Apps **Express** environments. Express won't keep a managed-identity login for our Azure registry, so pulling from it would mean storing the registry's shared admin password on every app. Instead, CD publishes the image as a **public** GitHub package and Azure pulls it without any credentials. The image has nothing secret in it. It's built from a clean checkout, and passwords are set on the container app as secrets. Express doesn't support Key Vault references either.
 
 ### Turning CD on
 

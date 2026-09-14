@@ -4,8 +4,9 @@ name: CD
 # Flow: full CI -> build image -> push to GHCR -> update the container app -> check /health.
 #
 # Why GHCR and not the Azure registry: goride-env is an Azure Container Apps "Express"
-# environment (the only kind our student subscription allows), and Express apps can't
-# log in to a private registry. So the image is published as a public GitHub package
+# environment (the only kind our student subscription allows). Express won't keep a
+# managed-identity login for our registry, and the only other option is the registry's
+# shared admin password on every app. So the image is published as a public GitHub package
 # and Azure pulls it without credentials. Nothing secret goes into the image: it is
 # built from a clean checkout, and passwords live on the container app as secrets.
 #
