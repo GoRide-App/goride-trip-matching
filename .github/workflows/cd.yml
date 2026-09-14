@@ -1,5 +1,15 @@
 name: CD
 
+# Deploys this service to Azure Container Apps on every push to dev.
+# Flow: full CI -> build image -> push to GHCR -> update the container app -> check /health.
+#
+# Why GHCR and not the Azure registry: goride-env is an Azure Container Apps "Express"
+# environment (the only kind our student subscription allows), and Express apps can't
+# log in to a private registry. So the image is published as a public GitHub package
+# and Azure pulls it without credentials. Nothing secret goes into the image: it is
+# built from a clean checkout, and passwords live on the container app as secrets.
+#
+# It does nothing until the repo variable CD_ENABLED is "true". See README, "CI/CD".
 on:
   push:
     branches: [dev]
@@ -7,70 +17,72 @@ on:
 
 permissions:
   contents: read
-  id-token: write
 
 concurrency:
   group: cd-${{ github.ref }}
   cancel-in-progress: false
 
 env:
-  ACR_NAME: ${{ vars.ACR_NAME }}
-  ACR_LOGIN_SERVER: ${{ vars.ACR_LOGIN_SERVER }}
-  IMAGE_NAME: goride-trip-matching
+  IMAGE: ghcr.io/goride-app/goride-trip-matching
   RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
   CONTAINER_APP_NAME: ${{ vars.AZURE_CONTAINERAPP_NAME }}
 
+# Explicit bash = `bash -eo pipefail`, same as ci-reusable.yml.
+defaults:
+  run:
+    shell: bash
+
 jobs:
-  # 1. Run the complete CI pipeline first
+  # 1. Same checks as a PR. Nothing gets built for Azure if these fail.
   ci:
     name: CI
-    uses: ./.github/workflows/ci.yml
+    uses: ./.github/workflows/ci-reusable.yml
     permissions:
       contents: read
 
-  # 2. Build and push only if CI succeeds
+  # 2. Build the image and push it to GHCR, tagged with the commit SHA.
   image:
-    name: Build & Push Docker Image
+    name: Build & Push Image
     runs-on: ubuntu-latest
     needs: ci
-
+    if: vars.CD_ENABLED == 'true'
+    permissions:
+      contents: read
+      packages: write # push to ghcr.io with the built-in GITHUB_TOKEN
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Log in to Azure
-        uses: azure/login@v2
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
         with:
-          client-id: ${{ vars.AZURE_CLIENT_ID }}
-          tenant-id: ${{ vars.AZURE_TENANT_ID }}
-          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Log in to Azure Container Registry
-        run: |
-          az acr login \
-            --name ${{ env.ACR_NAME }}
-
-      - name: Build Docker image
+      # The source label links the package to this repo on GitHub.
+      - name: Build image
         run: |
           docker build \
-          -t ${{ env.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:${{ github.sha }} .
+            --label "org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}" \
+            --label "org.opencontainers.image.revision=${{ github.sha }}" \
+            -t "$IMAGE:${{ github.sha }}" \
+            -t "$IMAGE:dev" \
+            .
 
-      - name: Push Docker image
+      - name: Push image
         run: |
-          docker push \
-            ${{ env.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          docker push "$IMAGE:${{ github.sha }}"
+          docker push "$IMAGE:dev"
 
-      - name: Show image
-        run: |
-          echo "Image:"
-          echo "${{ env.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:${{ github.sha }}"
-
-  # 3. Deploy only if image push succeeds
+  # 3. Point the container app at the new image and check it actually comes up.
   deploy:
     name: Deploy to Azure Container Apps
     runs-on: ubuntu-latest
     needs: image
-
+    permissions:
+      contents: read
+      id-token: write # OIDC login to Azure, no password stored in GitHub
     steps:
       - name: Log in to Azure
         uses: azure/login@v2
@@ -79,78 +91,42 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Verify Azure context
-        run: |
-          echo "=== Azure Account ==="
-          az account show \
-            --query "{Subscription:name,SubscriptionId:id,TenantId:tenantId}" \
-            -o table
-
-          echo "=== Resource Group ==="
-          az group show \
-            --name "${{ env.RESOURCE_GROUP }}" \
-            -o table
-
-          echo "=== Container App ==="
-          az containerapp show \
-            --name "${{ env.CONTAINER_APP_NAME }}" \
-            --resource-group "${{ env.RESOURCE_GROUP }}" \
-            --query "{Name:name,ResourceGroup:resourceGroup,Environment:managedEnvironmentId}" \
-            -o table
-
+      # DB, CORS and Kafka settings are set once on the container app itself
+      # (Db__Password as an app secret), so a deploy only swaps the image.
       - name: Deploy image
         run: |
-          IMAGE_URI="${{ env.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:${{ github.sha }}"
+          az config set extension.use_dynamic_install=yes_without_prompt --only-show-errors
+          az containerapp update \
+            --name "$CONTAINER_APP_NAME" \
+            --resource-group "$RESOURCE_GROUP" \
+            --image "$IMAGE:${{ github.sha }}" \
+            -o none
 
-          # goride-trip-matching reads its DB/CORS config from Db__* / Cors__*
-          # env vars at startup (see MySqlConnectionFactory.cs / Program.cs) --
-          # these are the cloud equivalent of the local .env file. Db__Password
-          # goes through Container Apps' own secret store (--secrets +
-          # secretref:) rather than a plain --set-env-vars value, so it never
-          # appears in plaintext in deployment history/logs.
-          # Kafka__BootstrapServers is optional: KafkaProducerService connects
-          # lazily, so the app starts fine without a reachable broker -- set
-          # KAFKA_BOOTSTRAP_SERVERS once a managed Kafka (or equivalent) exists.
-          if az containerapp show \
-            --name "${{ env.CONTAINER_APP_NAME }}" \
-            --resource-group "${{ env.RESOURCE_GROUP }}" &>/dev/null; then
-            # Update existing app -- image only; env vars/secrets already set
-            # on the app from when it was created (below) persist across updates.
-            az containerapp update \
-              --name "${{ env.CONTAINER_APP_NAME }}" \
-              --resource-group "${{ env.RESOURCE_GROUP }}" \
-              --image "$IMAGE_URI" \
-              --set-env-vars ASPNETCORE_ENVIRONMENT=Production
-          else
-            # Create new app -- full config, since there's nothing to inherit from.
-            az containerapp create \
-              --name "${{ env.CONTAINER_APP_NAME }}" \
-              --resource-group "${{ env.RESOURCE_GROUP }}" \
-              --image "$IMAGE_URI" \
-              --environment goride-env \
-              --target-port 8080 \
-              --registry-login-server "${{ env.ACR_LOGIN_SERVER }}" \
-              --registry-username '${{ secrets.AZURE_ACR_USERNAME }}' \
-              --registry-password '${{ secrets.AZURE_ACR_PASSWORD }}' \
-              --secrets db-password='${{ secrets.DB_PASSWORD }}' \
-              --env-vars \
-                ASPNETCORE_ENVIRONMENT=Production \
-                Db__Host='${{ vars.DB_HOST }}' \
-                Db__Port='${{ vars.DB_PORT }}' \
-                Db__Database='${{ vars.DB_DATABASE }}' \
-                Db__User='${{ vars.DB_USER }}' \
-                Db__SslMode=Required \
-                Db__Password=secretref:db-password \
-                Kafka__BootstrapServers='${{ vars.KAFKA_BOOTSTRAP_SERVERS }}' \
-                Cors__AllowedOrigins__0='${{ vars.FRONTEND_URL_LOCAL }}' \
-                Cors__AllowedOrigins__1='${{ vars.FRONTEND_URL_PROD }}'
-          fi
+      - name: Check /health
+        run: |
+          FQDN=$(az containerapp show \
+            --name "$CONTAINER_APP_NAME" \
+            --resource-group "$RESOURCE_GROUP" \
+            --query "properties.configuration.ingress.fqdn" -o tsv)
+          echo "Checking https://$FQDN/health"
+          for i in $(seq 1 12); do
+            CODE=$(curl -s -o body.txt -w "%{http_code}" "https://$FQDN/health" || true)
+            if [ "$CODE" = "200" ]; then
+              cat body.txt; echo
+              echo "Service is healthy."
+              exit 0
+            fi
+            echo "attempt $i/12: HTTP $CODE, waiting 10s..."
+            sleep 10
+          done
+          echo "Last response:"; cat body.txt 2>/dev/null || true; echo
+          echo "::error title=Deploy unhealthy::/health did not return 200 within 2 minutes. HTTP 500 with \"unhealthy\" usually means the app can't reach MySQL (check the db-password secret on the container app)."
+          exit 1
 
       - name: Deployment summary
         run: |
-          echo "## Deployment" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "Deployment successful." >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "Image:" >> "$GITHUB_STEP_SUMMARY"
-          echo "\`${{ env.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:${{ github.sha }}\`" >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "## Deployment"
+            echo ""
+            echo "Deployed \`$IMAGE:${{ github.sha }}\` to **$CONTAINER_APP_NAME**."
+          } >> "$GITHUB_STEP_SUMMARY"
