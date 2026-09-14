@@ -36,6 +36,8 @@ jobs:
   # 1. Same checks as a PR. Nothing gets built for Azure if these fail.
   ci:
     name: CI
+    # ci.yml already runs these checks on every push, so only repeat them when deploying.
+    if: vars.CD_ENABLED == 'true'
     uses: ./.github/workflows/ci-reusable.yml
     permissions:
       contents: read
@@ -45,7 +47,8 @@ jobs:
     name: Build & Push Image
     runs-on: ubuntu-latest
     needs: ci
-    if: vars.CD_ENABLED == 'true'
+    # Only publish from dev, so a manual run on another branch can't overwrite the :dev image.
+    if: vars.CD_ENABLED == 'true' && github.ref == 'refs/heads/dev'
     permissions:
       contents: read
       packages: write # push to ghcr.io with the built-in GITHUB_TOKEN
@@ -102,25 +105,46 @@ jobs:
             --image "$IMAGE:${{ github.sha }}" \
             -o none
 
+      # az containerapp update already fails if the new revision can't be provisioned
+      # (e.g. the image can't be pulled). This also confirms the latest revision really
+      # runs this commit's image, so an old revision can't pass /health on its behalf.
+      - name: Verify new revision
+        run: |
+          for i in $(seq 1 12); do
+            LATEST=$(az containerapp revision list               --name "$CONTAINER_APP_NAME"               --resource-group "$RESOURCE_GROUP"               -o json | jq -c 'sort_by(.properties.createdTime) | last')
+            IMG=$(echo "$LATEST" | jq -r '.properties.template.containers[0].image')
+            STATE=$(echo "$LATEST" | jq -r '.properties.provisioningState')
+            echo "attempt $i/12: $(echo "$LATEST" | jq -r '.name') state=$STATE image=$IMG"
+            if [ "$IMG" = "$IMAGE:${{ github.sha }}" ] && [ "$STATE" = "Provisioned" ]; then
+              echo "New revision is provisioned."
+              exit 0
+            fi
+            if [ "$STATE" = "Failed" ]; then
+              break
+            fi
+            sleep 10
+          done
+          echo "::error title=Revision not ready::The latest revision isn't a provisioned $IMAGE:${{ github.sha }}."
+          exit 1
+
       - name: Check /health
         run: |
-          FQDN=$(az containerapp show \
-            --name "$CONTAINER_APP_NAME" \
-            --resource-group "$RESOURCE_GROUP" \
-            --query "properties.configuration.ingress.fqdn" -o tsv)
+          FQDN=$(az containerapp show             --name "$CONTAINER_APP_NAME"             --resource-group "$RESOURCE_GROUP"             --query "properties.configuration.ingress.fqdn" -o tsv)
           echo "Checking https://$FQDN/health"
           for i in $(seq 1 12); do
-            CODE=$(curl -s -o body.txt -w "%{http_code}" "https://$FQDN/health" || true)
+            CODE=$(curl -s --connect-timeout 5 --max-time 10 -o body.txt -w "%{http_code}" "https://$FQDN/health" || true)
             if [ "$CODE" = "200" ]; then
               cat body.txt; echo
               echo "Service is healthy."
               exit 0
             fi
-            echo "attempt $i/12: HTTP $CODE, waiting 10s..."
-            sleep 10
+            echo "attempt $i/12: HTTP $CODE"
+            if [ "$i" -lt 12 ]; then
+              sleep 10
+            fi
           done
           echo "Last response:"; cat body.txt 2>/dev/null || true; echo
-          echo "::error title=Deploy unhealthy::/health did not return 200 within 2 minutes. HTTP 500 with \"unhealthy\" usually means the app can't reach MySQL (check the db-password secret on the container app)."
+          echo "::error title=Deploy unhealthy::/health didn't return 200 after 12 attempts (about 3 minutes). HTTP 500 with \"unhealthy\" usually means the app can't reach MySQL (check the db-password secret on the container app)."
           exit 1
 
       - name: Deployment summary
