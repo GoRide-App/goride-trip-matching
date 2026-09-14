@@ -5,10 +5,27 @@ name: CI
 # checks before it deploys anything.
 on:
   pull_request:
-    branches: [dev, main]
-  push:
-    branches: [dev, main]
-  workflow_dispatch:
+    branches: [ main, dev ]
+  # Lets cd.yml run this same build+test+docker-build job as its first gate,
+  # instead of duplicating it — mirrors goride-identity-auth's ci-reusable.yml.
+  workflow_call:
+
+jobs:
+  build-test-docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore
+        run: dotnet restore GoRide.Trip.sln
+
+      - name: Build
+        run: dotnet build GoRide.Trip.sln --no-restore --configuration Release
 
 permissions:
   contents: read

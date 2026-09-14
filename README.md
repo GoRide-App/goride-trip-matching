@@ -1,6 +1,6 @@
 # GoRide.ServiceTemplate
 
-This is the **base walking skeleton** for every GoRide backend microservice — it contains everything that should exist *before* any Sprint story work begins: a runnable ASP.NET Web API, a working Azure MySQL connection (ADO.NET, no ORM), CORS configured for the Vercel-hosted frontend, a Dockerfile, a basic CI pipeline, and a test project. No Kafka code yet — that comes later, per-service, once a story actually needs it.
+This is the **Codebase Structure** for GoRide-trip_matching backend microservice.
 
 ## Folder structure
 
@@ -111,11 +111,28 @@ Once the existing violations are cleaned up we'll remove `continue-on-error` fro
 
 
 ---------------------------------------------------
+QA Testings
+---------------------------------------------------
+
+
 docker compose up --build -d
 
-$ sleep 2 && curl -s -X POST http://localhost:8080/fare/estimate \
-  -H "Content-Type: application/json" \
-  -d '{"startLat": 6.9344, "startLng": 79.8428, "endLat": 6.8905, "endLng": 79.8565}' \
-  -w "\nHTTP_STATUS:%{http_code}\n"
+
+# SCRUM-53/54 
+## Happy path — valid input, expected 200 response---
+* Black box — hit only through the public HTTP endpoint, no code involved.
+
+Invoke-RestMethod -Uri "http://localhost:8080/fare/estimate" -Method Post -ContentType "application/json" -Body '{"startLat":6.9344,"startLng":79.8428,"endLat":6.8905,"endLng":79.8565}'
+
+## Negative / edge cases — not happy path anymore
+* Black box — same, just through the HTTP interface 
+* 0 Distance Trip---
+
+Invoke-RestMethod -Uri "http://localhost:8080/fare/estimate" -Method Post -ContentType "application/json" -Body '{"startLat":6.9344,"startLng":79.8428,"endLat":6.9344,"endLng":79.8428}'
+
+
+* A missing field return Bad Request ---
+
+Invoke-RestMethod -Uri "http://localhost:8080/fare/estimate" -Method Post -ContentType "application/json" -Body '{"startLat":6.9344,"startLng":79.8428,"endLat":6.8905}'
 
 ---------------------------------------------------

@@ -1,0 +1,128 @@
+{
+  "info": {
+    "name": "GoRide Trip Matching — Fare Estimate",
+    "description": "Sprint 2 QA pack for goride-trip-matching, scoped to SCRUM-54 (fare estimation) only. Active Drivers (/drivers/active) is intentionally excluded — that story isn't in this sprint's scope, so it isn't reported on here even though the endpoint exists in the codebase. Covers /health and POST /fare/estimate. No auth header required — neither controller carries an [Authorize] attribute. baseUrl defaults to http://localhost:8080, matching both docker-compose.yml and goride-dev.ps1's local dev port for trip-matching.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:8080", "type": "string" }
+  ],
+  "item": [
+    {
+      "name": "00 Health",
+      "item": [
+        {
+          "name": "GET /health — service and DB are up",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/health", "host": ["{{baseUrl}}"], "path": ["health"] }
+          },
+          "event": [{
+            "listen": "test",
+            "script": { "type": "text/javascript", "exec": [
+              "pm.test('Status code is 200', () => pm.response.to.have.status(200));",
+              "const body = pm.response.json();",
+              "pm.test('status is healthy', () => pm.expect(body.status).to.eql('healthy'));"
+            ]}
+          }]
+        }
+      ]
+    },
+    {
+      "name": "Fare Estimate (SCRUM-54)",
+      "item": [
+        {
+          "name": "Estimate fare — happy path (Colombo Fort to Bambalapitiya)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/fare/estimate", "host": ["{{baseUrl}}"], "path": ["fare","estimate"] },
+            "body": { "mode": "raw", "raw": "{\n  \"startLat\": 6.9344,\n  \"startLng\": 79.8428,\n  \"endLat\": 6.8905,\n  \"endLng\": 79.8565\n}", "options": { "raw": { "language": "json" } } }
+          },
+          "event": [{
+            "listen": "test",
+            "script": { "type": "text/javascript", "exec": [
+              "pm.test('Status code is 200', () => pm.response.to.have.status(200));",
+              "const body = pm.response.json();",
+              "pm.test('response is a non-empty array of fare options', () => {",
+              "  pm.expect(body).to.be.an('array');",
+              "  pm.expect(body.length).to.be.greaterThan(0);",
+              "});",
+              "pm.test('exactly one vehicle type is available (TukTuk-only rule)', () => {",
+              "  const availableCount = body.filter(o => o.available === true).length;",
+              "  pm.expect(availableCount).to.eql(1);",
+              "});",
+              "pm.test('every option carries the same distance and duration', () => {",
+              "  const distances = new Set(body.map(o => o.distanceKm));",
+              "  pm.expect(distances.size).to.eql(1);",
+              "});"
+            ]}
+          }]
+        },
+        {
+          "name": "Estimate fare — missing startLat is refused (400)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/fare/estimate", "host": ["{{baseUrl}}"], "path": ["fare","estimate"] },
+            "body": { "mode": "raw", "raw": "{\n  \"startLng\": 79.8428,\n  \"endLat\": 6.8905,\n  \"endLng\": 79.8565\n}", "options": { "raw": { "language": "json" } } }
+          },
+          "event": [{
+            "listen": "test",
+            "script": { "type": "text/javascript", "exec": [
+              "pm.test('Status code is 400', () => pm.response.to.have.status(400));"
+            ]}
+          }]
+        },
+        {
+          "name": "Estimate fare — missing endLng is refused (400)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/fare/estimate", "host": ["{{baseUrl}}"], "path": ["fare","estimate"] },
+            "body": { "mode": "raw", "raw": "{\n  \"startLat\": 6.9344,\n  \"startLng\": 79.8428,\n  \"endLat\": 6.8905\n}", "options": { "raw": { "language": "json" } } }
+          },
+          "event": [{
+            "listen": "test",
+            "script": { "type": "text/javascript", "exec": [
+              "pm.test('Status code is 400', () => pm.response.to.have.status(400));"
+            ]}
+          }]
+        },
+        {
+          "name": "Estimate fare — identical start and end coordinates (zero distance)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/fare/estimate", "host": ["{{baseUrl}}"], "path": ["fare","estimate"] },
+            "body": { "mode": "raw", "raw": "{\n  \"startLat\": 6.9344,\n  \"startLng\": 79.8428,\n  \"endLat\": 6.9344,\n  \"endLng\": 79.8428\n}", "options": { "raw": { "language": "json" } } }
+          },
+          "event": [{
+            "listen": "test",
+            "script": { "type": "text/javascript", "exec": [
+              "pm.test('Status code is 200 (no validation blocks a zero-distance request)', () => pm.response.to.have.status(200));",
+              "const body = pm.response.json();",
+              "pm.test('distanceKm is exactly 0', () => pm.expect(body[0].distanceKm).to.eql(0));"
+            ]}
+          }]
+        },
+        {
+          "name": "Estimate fare — out-of-range latitude is NOT rejected (gap, not a bug fix expectation)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/fare/estimate", "host": ["{{baseUrl}}"], "path": ["fare","estimate"] },
+            "body": { "mode": "raw", "raw": "{\n  \"startLat\": 200,\n  \"startLng\": 79.8428,\n  \"endLat\": 6.8905,\n  \"endLng\": 79.8565\n}", "options": { "raw": { "language": "json" } } }
+          },
+          "event": [{
+            "listen": "test",
+            "script": { "type": "text/javascript", "exec": [
+              "pm.test('Status code is 200 — FareCalculationService has no lat/lng range validation, so this documents current behaviour rather than asserting it is correct', () => pm.response.to.have.status(200));"
+            ]}
+          }]
+        }
+      ]
+    }
+  ]
+}
