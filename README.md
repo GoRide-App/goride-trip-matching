@@ -76,20 +76,42 @@ Everything is in `.github/workflows/`:
 |---|---|---|
 | `ci.yml` | every PR into `dev`/`main`, and pushes to them | just calls `ci-reusable.yml` |
 | `ci-reusable.yml` | called by the other two | build, tests, `dotnet format` check (warning only for now), vulnerable NuGet scan (**blocks**), docker build. Ends in a **CI Gate** job — that's the required check on PRs |
-| `cd.yml` | push to `dev` | runs CI, builds the image, pushes it to ACR, updates the Azure Container App, checks `/health` |
+| `cd.yml` | push to `dev` | runs CI, builds the image, pushes it to `ghcr.io/goride-app/goride-trip-matching`, updates the Azure Container App, checks `/health` |
 
-Branch flow: `SCRUM-xx-...` → PR into `dev` (CI Gate + CodeRabbit) → merge auto-deploys `dev` → `dev` → `main` PR when we want a release.
+Branch flow: `SCRUM-xx-...` → PR into `dev` (CI Gate + CodeRabbit review) → merge deploys `dev` → `dev` → `main` PR for a release.
 
-CodeRabbit config is in `.coderabbit.yaml`. Note it reviews PRs into `dev` because of `base_branches` there — don't remove that.
+**Don't change the workflow files inside a story branch.** Pipeline changes go in their own `ci/...` PR so they get reviewed on their own.
+
+CodeRabbit reads `.coderabbit.yaml`. Its `base_branches: ["dev"]` line is what makes it review PRs into `dev`, so keep it.
+
+### Why images go to GHCR, not the Azure registry
+
+Our Azure for Students subscription only allows Container Apps **Express** environments, and Express apps can't log in to a private registry: Azure silently drops the registry login. So CD publishes the image as a **public** GitHub package and Azure pulls it without credentials. The image has nothing secret in it. It's built from a clean checkout, and passwords are set on the container app as secrets. Express doesn't support Key Vault references either.
 
 ### Turning CD on
 
-`cd.yml` skips the deploy until the repo variable `CD_ENABLED` is `true`. Before flipping it:
+`cd.yml` does nothing until the repo variable `CD_ENABLED` is `true`. Before that:
 
-1. Add a federated credential on the Azure app registration (`AZURE_CLIENT_ID`) with subject `repo:GoRide-App/goride-trip-matching:ref:refs/heads/dev`. Without it the Azure login step fails.
-2. Create the container app once by hand in `goride-rg` / `goride-env`, named whatever `AZURE_CONTAINERAPP_NAME` is (`goride-trip-matching`), target port 8080, **external** HTTP ingress (the deploy job calls `/health` from a GitHub runner, so internal-only ingress would fail it), pulling from the ACR. **Don't reuse `goride-api` — that's identity-auth.**
-3. On the container app set `Db__Password` (as a secret), `Cors__AllowedOrigins__1` (the real Vercel URL) and `Kafka__BootstrapServers`.
-4. Settings → Secrets and variables → Actions → Variables → set `CD_ENABLED` = `true`. The next push to `dev` deploys.
+1. **Azure (done):** container app `goride-trip-matching` in `goride-rg` / `goride-env` (port 8080, external ingress, DB host/user/CORS env vars), and a federated credential on `goride-github-actions-identity` for this repo's `dev` branch.
+2. **Azure (resource group owner):** give `goride-github-actions-identity` the **Contributor** role on the `goride-trip-matching` container app.
+3. **Azure (whoever has the password):** add the DB password as an app secret and point the env var at it:
+   ```bash
+   az containerapp secret set -n goride-trip-matching -g goride-rg --secrets db-password=<password>
+   az containerapp update -n goride-trip-matching -g goride-rg --set-env-vars Db__Password=secretref:db-password
+   ```
+4. **GitHub (org owner):** allow public packages by default (org Settings → Packages), or make the `goride-trip-matching` package public after the first push.
+5. **GitHub (this repo):** Settings → Secrets and variables → Actions → **Variables**. Run the `az` commands with the student subscription selected:
+
+   | Name | Value |
+   |---|---|
+   | `AZURE_CLIENT_ID` | `az identity show -n goride-github-actions-identity -g goride-rg --query clientId -o tsv` |
+   | `AZURE_TENANT_ID` | `az account show --query tenantId -o tsv` |
+   | `AZURE_SUBSCRIPTION_ID` | `az account show --query id -o tsv` |
+   | `AZURE_RESOURCE_GROUP` | `goride-rg` |
+   | `AZURE_CONTAINERAPP_NAME` | `goride-trip-matching` |
+   | `CD_ENABLED` | `true` (set this last) |
+
+Then push to `dev`, or run **CD** from the Actions tab. If `/health` returns 500 "unhealthy", the app is running but can't reach MySQL, so check the `db-password` secret.
 
 ### Formatting
 
