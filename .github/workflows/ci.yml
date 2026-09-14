@@ -5,6 +5,9 @@ on:
     branches: [ main, dev ]
   pull_request:
     branches: [ main, dev ]
+  # Lets cd.yml run this same build+test+docker-build job as its first gate,
+  # instead of duplicating it — mirrors goride-identity-auth's ci-reusable.yml.
+  workflow_call:
 
 jobs:
   build-test-docker:

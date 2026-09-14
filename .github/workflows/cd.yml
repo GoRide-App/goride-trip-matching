@@ -1,0 +1,156 @@
+name: CD
+
+on:
+  push:
+    branches: [dev]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: cd-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  ACR_NAME: ${{ vars.ACR_NAME }}
+  ACR_LOGIN_SERVER: ${{ vars.ACR_LOGIN_SERVER }}
+  IMAGE_NAME: goride-trip-matching
+  RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+  CONTAINER_APP_NAME: ${{ vars.AZURE_CONTAINERAPP_NAME }}
+
+jobs:
+  # 1. Run the complete CI pipeline first
+  ci:
+    name: CI
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
+  # 2. Build and push only if CI succeeds
+  image:
+    name: Build & Push Docker Image
+    runs-on: ubuntu-latest
+    needs: ci
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Log in to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Log in to Azure Container Registry
+        run: |
+          az acr login \
+            --name ${{ env.ACR_NAME }}
+
+      - name: Build Docker image
+        run: |
+          docker build \
+          -t ${{ env.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:${{ github.sha }} .
+
+      - name: Push Docker image
+        run: |
+          docker push \
+            ${{ env.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+
+      - name: Show image
+        run: |
+          echo "Image:"
+          echo "${{ env.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:${{ github.sha }}"
+
+  # 3. Deploy only if image push succeeds
+  deploy:
+    name: Deploy to Azure Container Apps
+    runs-on: ubuntu-latest
+    needs: image
+
+    steps:
+      - name: Log in to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Verify Azure context
+        run: |
+          echo "=== Azure Account ==="
+          az account show \
+            --query "{Subscription:name,SubscriptionId:id,TenantId:tenantId}" \
+            -o table
+
+          echo "=== Resource Group ==="
+          az group show \
+            --name "${{ env.RESOURCE_GROUP }}" \
+            -o table
+
+          echo "=== Container App ==="
+          az containerapp show \
+            --name "${{ env.CONTAINER_APP_NAME }}" \
+            --resource-group "${{ env.RESOURCE_GROUP }}" \
+            --query "{Name:name,ResourceGroup:resourceGroup,Environment:managedEnvironmentId}" \
+            -o table
+
+      - name: Deploy image
+        run: |
+          IMAGE_URI="${{ env.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:${{ github.sha }}"
+
+          # goride-trip-matching reads its DB/CORS config from Db__* / Cors__*
+          # env vars at startup (see MySqlConnectionFactory.cs / Program.cs) --
+          # these are the cloud equivalent of the local .env file. Db__Password
+          # goes through Container Apps' own secret store (--secrets +
+          # secretref:) rather than a plain --set-env-vars value, so it never
+          # appears in plaintext in deployment history/logs.
+          # Kafka__BootstrapServers is optional: KafkaProducerService connects
+          # lazily, so the app starts fine without a reachable broker -- set
+          # KAFKA_BOOTSTRAP_SERVERS once a managed Kafka (or equivalent) exists.
+          if az containerapp show \
+            --name "${{ env.CONTAINER_APP_NAME }}" \
+            --resource-group "${{ env.RESOURCE_GROUP }}" &>/dev/null; then
+            # Update existing app -- image only; env vars/secrets already set
+            # on the app from when it was created (below) persist across updates.
+            az containerapp update \
+              --name "${{ env.CONTAINER_APP_NAME }}" \
+              --resource-group "${{ env.RESOURCE_GROUP }}" \
+              --image "$IMAGE_URI" \
+              --set-env-vars ASPNETCORE_ENVIRONMENT=Production
+          else
+            # Create new app -- full config, since there's nothing to inherit from.
+            az containerapp create \
+              --name "${{ env.CONTAINER_APP_NAME }}" \
+              --resource-group "${{ env.RESOURCE_GROUP }}" \
+              --image "$IMAGE_URI" \
+              --environment goride-env \
+              --target-port 8080 \
+              --registry-login-server "${{ env.ACR_LOGIN_SERVER }}" \
+              --registry-username '${{ secrets.AZURE_ACR_USERNAME }}' \
+              --registry-password '${{ secrets.AZURE_ACR_PASSWORD }}' \
+              --secrets db-password='${{ secrets.DB_PASSWORD }}' \
+              --env-vars \
+                ASPNETCORE_ENVIRONMENT=Production \
+                Db__Host='${{ vars.DB_HOST }}' \
+                Db__Port='${{ vars.DB_PORT }}' \
+                Db__Database='${{ vars.DB_DATABASE }}' \
+                Db__User='${{ vars.DB_USER }}' \
+                Db__SslMode=Required \
+                Db__Password=secretref:db-password \
+                Kafka__BootstrapServers='${{ vars.KAFKA_BOOTSTRAP_SERVERS }}' \
+                Cors__AllowedOrigins__0='${{ vars.FRONTEND_URL_LOCAL }}' \
+                Cors__AllowedOrigins__1='${{ vars.FRONTEND_URL_PROD }}'
+          fi
+
+      - name: Deployment summary
+        run: |
+          echo "## Deployment" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Deployment successful." >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Image:" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`${{ env.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:${{ github.sha }}\`" >> "$GITHUB_STEP_SUMMARY"
