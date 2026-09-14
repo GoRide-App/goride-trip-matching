@@ -68,6 +68,39 @@ Say you're creating `goride-location` from this template:
 
 Only once all of that is green do you start on the service's first real Sprint story.
 
+## CI/CD
+
+Everything is in `.github/workflows/`:
+
+| File | Runs when | Does |
+|---|---|---|
+| `ci.yml` | every PR into `dev`/`main`, and pushes to them | just calls `ci-reusable.yml` |
+| `ci-reusable.yml` | called by the other two | build, tests, `dotnet format` check (warning only for now), vulnerable NuGet scan (**blocks**), docker build. Ends in a **CI Gate** job — that's the required check on PRs |
+| `cd.yml` | push to `dev` | runs CI, builds the image, pushes it to ACR, updates the Azure Container App, checks `/health` |
+
+Branch flow: `SCRUM-xx-...` → PR into `dev` (CI Gate + CodeRabbit) → merge auto-deploys `dev` → `dev` → `main` PR when we want a release.
+
+CodeRabbit config is in `.coderabbit.yaml`. Note it reviews PRs into `dev` because of `base_branches` there — don't remove that.
+
+### Turning CD on
+
+`cd.yml` skips the deploy until the repo variable `CD_ENABLED` is `true`. Before flipping it:
+
+1. Add a federated credential on the Azure app registration (`AZURE_CLIENT_ID`) with subject `repo:GoRide-App/goride-trip-matching:ref:refs/heads/dev`. Without it the Azure login step fails.
+2. Create the container app once by hand in `goride-rg` / `goride-env`, named whatever `AZURE_CONTAINERAPP_NAME` is (`goride-trip-matching`), target port 8080, **external** HTTP ingress (the deploy job calls `/health` from a GitHub runner, so internal-only ingress would fail it), pulling from the ACR. **Don't reuse `goride-api` — that's identity-auth.**
+3. On the container app set `Db__Password` (as a secret), `Cors__AllowedOrigins__1` (the real Vercel URL) and `Kafka__BootstrapServers`.
+4. Settings → Secrets and variables → Actions → Variables → set `CD_ENABLED` = `true`. The next push to `dev` deploys.
+
+### Formatting
+
+CI warns about `dotnet format` violations but doesn't fail on them yet. Run this before pushing:
+
+```bash
+dotnet format GoRide.Trip.sln
+```
+
+Once the existing violations are cleaned up we'll remove `continue-on-error` from the formatting step and make it blocking.
+
 ## Why ADO.NET, not an ORM
 
 `MySqlConnectionFactory` returns a raw `MySqlConnection` — every query you write uses parameterised `MySqlCommand` objects directly, not Entity Framework or any other ORM. This is a deliberate, explicit requirement in the assignment brief, not a stylistic choice — keep it consistent across all four services.
