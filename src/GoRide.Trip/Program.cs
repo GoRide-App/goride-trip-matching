@@ -22,6 +22,15 @@ builder.Services.AddHttpClient<IActiveDriversService, ActiveDriversService>(clie
     client.BaseAddress = new Uri(identityAuthUrl);
 });
 
+// ---- goride-location client (real road-network distance/duration — see Services/LocationClient.cs) ----
+builder.Services.AddHttpClient<ILocationClient, LocationClient>(client =>
+{
+    var locationUrl = builder.Configuration["Location:BaseUrl"]
+        ?? throw new InvalidOperationException("Missing configuration: Location:BaseUrl");
+    client.BaseAddress = new Uri(locationUrl);
+    client.Timeout = TimeSpan.FromSeconds(8);
+});
+
 // ---- Kafka producer service (singleton) ----
 builder.Services.AddSingleton<KafkaProducerService>();  // One shared Kafka connection for the whole app's lifetime, not a new one per request.
 

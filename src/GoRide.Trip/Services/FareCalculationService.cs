@@ -11,9 +11,10 @@ public interface IFareCalculationService
 public class FareCalculationService : IFareCalculationService
 {
     private const double EarthRadiusKm = 6371.0;
-    private const double AverageSpeedKmh = 25.0; // assumed average TukTuk speed in mixed city/suburban traffic
+    private const double AverageSpeedKmh = 25.0; // assumed average TukTuk speed -- only used as a fallback when goride-location can't be reached
 
     private readonly IVehicleTypeRepository _vehicleTypeRepository;
+    private readonly ILocationClient _locationClient;
 
     private static readonly (string Id, string Code, decimal BaseFare, decimal RatePerKm, decimal RatePerMin)[] AdditionalDisplayTypes = new[]
     {
@@ -22,15 +23,32 @@ public class FareCalculationService : IFareCalculationService
         ("vt_xl", "XL", 500m, 180m, 15m),
     };
 
-    public FareCalculationService(IVehicleTypeRepository vehicleTypeRepository)
+    public FareCalculationService(IVehicleTypeRepository vehicleTypeRepository, ILocationClient locationClient)
     {
         _vehicleTypeRepository = vehicleTypeRepository;
+        _locationClient = locationClient;
     }
 
     public async Task<List<FareOption>> EstimateFaresAsync(decimal startLat, decimal startLng, decimal endLat, decimal endLng)
     {
-        double distanceKm = CalculateDistanceKm((double)startLat, (double)startLng, (double)endLat, (double)endLng);
-        double durationMinutes = (distanceKm / AverageSpeedKmh) * 60.0;
+        // Prefer goride-location's real road-network route (ORS, falling back to OSRM)
+        // over a straight-line guess. Only fall back to Haversine here if
+        // goride-location itself is unreachable/erroring, so fare estimates keep
+        // working even when that service is down.
+        var routePlan = await _locationClient.GetRoutePlanAsync(
+            (double)startLat, (double)startLng, (double)endLat, (double)endLng);
+
+        double distanceKm;
+        double durationMinutes;
+        if (routePlan is { } plan)
+        {
+            (distanceKm, durationMinutes) = plan;
+        }
+        else
+        {
+            distanceKm = CalculateDistanceKm((double)startLat, (double)startLng, (double)endLat, (double)endLng);
+            durationMinutes = (distanceKm / AverageSpeedKmh) * 60.0;
+        }
 
         var vehicleTypes = await _vehicleTypeRepository.GetAllAsync();
         var options = new List<FareOption>();
@@ -98,6 +116,7 @@ public class FareCalculationService : IFareCalculationService
     };
 
     // Haversine formula: great-circle (straight-line) distance between two lat/lng points.
+    // Fallback only -- used when goride-location's real routed distance is unavailable.
     private static double CalculateDistanceKm(double lat1, double lng1, double lat2, double lng2)
     {
         double dLat = ToRadians(lat2 - lat1);

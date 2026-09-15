@@ -7,15 +7,25 @@ using GoRide.Trip.Services;
 namespace GoRide.Trip.Tests.Services;
 
 public class FareCalculationServiceTests {
+    // goride-location is unavailable in these unit tests, so every test uses a
+    // mocked ILocationClient that returns null -- this exercises (and pins the
+    // behavior of) FareCalculationService's Haversine fallback path.
+    private static Mock<ILocationClient> MockLocationClientReturningNull() {
+        var mock = new Mock<ILocationClient>();
+        mock.Setup(l => l.GetRoutePlanAsync(It.IsAny<double>(), It.IsAny<double>(), It.IsAny<double>(), It.IsAny<double>()))
+            .ReturnsAsync(((double DistanceKm, double DurationMinutes)?)null);
+        return mock;
+    }
+
     [Fact]
     public async Task EstimateFaresAsync_TukTukVehicleType_IsAvailable() {  // Test for TukTuk vehicle type availability
         // Arrange
         var mockRepo = new Mock<IVehicleTypeRepository>();  // Create a mock repository for vehicle types
         mockRepo.Setup(r => r.GetAllAsync()).ReturnsAsync(new List<VehicleType> {  // Setup the mock to return a list containing a TukTuk vehicle type
-            new VehicleType { Id = "vt_tuktuk", Code = "TUKTUK", BaseFare = 100m, RatePerKm = 40m, RatePerMin = 5m, Active = true }  
+            new VehicleType { Id = "vt_tuktuk", Code = "TUKTUK", BaseFare = 100m, RatePerKm = 40m, RatePerMin = 5m, Active = true }
         });
 
-        var service = new FareCalculationService(mockRepo.Object);  // Create an instance of the FareCalculationService using the mock repository
+        var service = new FareCalculationService(mockRepo.Object, MockLocationClientReturningNull().Object);  // Create an instance of the FareCalculationService using the mock repository
 
         // Act — Colombo Fort to Bambalapitiya, roughly
         var result = await service.EstimateFaresAsync(6.9344m, 79.8428m, 6.8905m, 79.8565m);   // Call the EstimateFaresAsync method with coordinates for Colombo Fort to Bambalapitiya
@@ -33,7 +43,7 @@ public class FareCalculationServiceTests {
             new VehicleType { Id = "vt_car", Code = "CAR", BaseFare = 300m, RatePerKm = 120m, RatePerMin = 10m, Active = true }
         });    // Setup the mock to return a list containing a CAR vehicle type
 
-        var service = new FareCalculationService(mockRepo.Object);  // Create an instance of the FareCalculationService using the mock repository
+        var service = new FareCalculationService(mockRepo.Object, MockLocationClientReturningNull().Object);  // Create an instance of the FareCalculationService using the mock repository
 
         var result = await service.EstimateFaresAsync(6.9344m, 79.8428m, 6.8905m, 79.8565m);  // Call the EstimateFaresAsync method with coordinates for Colombo Fort to Bambalapitiya
 
@@ -45,7 +55,7 @@ public class FareCalculationServiceTests {
         var mockRepo = new Mock<IVehicleTypeRepository>();    // Create a mock repository for vehicle types
         mockRepo.Setup(r => r.GetAllAsync()).ReturnsAsync(new List<VehicleType>());   // Setup the mock to return an empty list, simulating a repository with no vehicle types
 
-        var service = new FareCalculationService(mockRepo.Object);  // Create an instance of the FareCalculationService using the mock repository
+        var service = new FareCalculationService(mockRepo.Object, MockLocationClientReturningNull().Object);  // Create an instance of the FareCalculationService using the mock repository
 
         var result = await service.EstimateFaresAsync(6.9344m, 79.8428m, 6.8905m, 79.8565m);   // Call the EstimateFaresAsync method with coordinates for Colombo Fort to Bambalapitiya
 
@@ -61,7 +71,7 @@ public class FareCalculationServiceTests {
             new VehicleType {Id = "vt_tuktuk", Code = "TUKTUK", BaseFare = 100m, RatePerKm = 40m, RatePerMin = 5m, Active = true }
         });
 
-        var service = new FareCalculationService(mockupRepo.Object);
+        var service = new FareCalculationService(mockupRepo.Object, MockLocationClientReturningNull().Object);
 
         var result = await service.EstimateFaresAsync(6.9344m, 79.8428m, 6.9344m, 79.8428m); // Same start and end coordinates
 
