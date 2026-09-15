@@ -1,5 +1,6 @@
 using GoRide.Trip.Data;
 using GoRide.Trip.Events;
+using GoRide.Trip.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -7,9 +8,28 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
+builder.Services.AddScoped<IVehicleTypeRepository, VehicleTypeRepository>();
+builder.Services.AddScoped<IFareCalculationService, FareCalculationService>();
 
 // ---- Database (ADO.NET connection factory — see Data/MySqlConnectionFactory.cs) ----
 builder.Services.AddScoped<IDbConnectionFactory, MySqlConnectionFactory>();
+
+// ---- identity-auth client (for listing active drivers — see Services/ActiveDriversService.cs) ----
+builder.Services.AddHttpClient<IActiveDriversService, ActiveDriversService>(client =>
+{
+    var identityAuthUrl = builder.Configuration["IdentityAuth:BaseUrl"]
+        ?? throw new InvalidOperationException("Missing configuration: IdentityAuth:BaseUrl");
+    client.BaseAddress = new Uri(identityAuthUrl);
+});
+
+// ---- goride-location client (real road-network distance/duration — see Services/LocationClient.cs) ----
+builder.Services.AddHttpClient<ILocationClient, LocationClient>(client =>
+{
+    var locationUrl = builder.Configuration["Location:BaseUrl"]
+        ?? throw new InvalidOperationException("Missing configuration: Location:BaseUrl");
+    client.BaseAddress = new Uri(locationUrl);
+    client.Timeout = TimeSpan.FromSeconds(8);
+});
 
 // ---- Kafka producer service (singleton) ----
 builder.Services.AddSingleton<KafkaProducerService>();  // One shared Kafka connection for the whole app's lifetime, not a new one per request.

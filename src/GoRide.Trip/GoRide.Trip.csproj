@@ -6,8 +6,6 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>GoRide.Trip</RootNamespace>
     <InvariantGlobalization>true</InvariantGlobalization>
-    <RuntimeIdentifier>linux-x64</RuntimeIdentifier>
-    <SelfContained>false</SelfContained>
   </PropertyGroup>
 
   <ItemGroup>
