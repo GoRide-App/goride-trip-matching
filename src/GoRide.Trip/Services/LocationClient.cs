@@ -1,4 +1,6 @@
+using System.Globalization;
 using System.Net.Http.Json;
+using GoRide.Trip.Models;
 
 namespace GoRide.Trip.Services;
 
@@ -6,6 +8,9 @@ public interface ILocationClient
 {
     Task<(double DistanceKm, double DurationMinutes)?> GetRoutePlanAsync(
         double pickupLat, double pickupLng, double destinationLat, double destinationLng);
+
+    /// <summary>Drivers currently marked Online (available) within radiusKm of (lat, lng). Empty list on any failure.</summary>
+    Task<List<NearbyDriverLocation>> GetNearbyDriversAsync(double lat, double lng, double radiusKm);
 }
 
 /// <summary>
@@ -56,6 +61,33 @@ public class LocationClient : ILocationClient
         {
             _logger.LogWarning(ex, "Could not reach goride-location for /rides/plan -- falling back to straight-line distance.");
             return null;
+        }
+    }
+
+    public async Task<List<NearbyDriverLocation>> GetNearbyDriversAsync(double lat, double lng, double radiusKm)
+    {
+        try
+        {
+            var url = $"/location/nearby-drivers?lat={lat.ToString(CultureInfo.InvariantCulture)}" +
+                      $"&lng={lng.ToString(CultureInfo.InvariantCulture)}" +
+                      $"&radiusKm={radiusKm.ToString(CultureInfo.InvariantCulture)}";
+
+            var response = await _httpClient.GetAsync(url);
+            if (!response.IsSuccessStatusCode)
+            {
+                _logger.LogWarning(
+                    "goride-location returned HTTP {StatusCode} for /location/nearby-drivers -- treating as no nearby drivers.",
+                    (int)response.StatusCode);
+                return new List<NearbyDriverLocation>();
+            }
+
+            var drivers = await response.Content.ReadFromJsonAsync<List<NearbyDriverLocation>>();
+            return drivers ?? new List<NearbyDriverLocation>();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Could not reach goride-location for /location/nearby-drivers -- treating as no nearby drivers.");
+            return new List<NearbyDriverLocation>();
         }
     }
 
