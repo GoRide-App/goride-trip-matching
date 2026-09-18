@@ -10,8 +10,24 @@ public class KafkaProducerService : IDisposable {  // IDisposable interface, whi
 
     public KafkaProducerService(IConfiguration config) { // KafkaProducerService method is a constructor for the KafkaProducerService class. It takes an IConfiguration object as a parameter, which is typically used to access configuration settings in a .NET application. The constructor is responsible for initializing the Kafka producer with the necessary configuration settings, such as the Kafka broker addresses and other options. This allows the KafkaProducerService to be properly configured and ready to send messages to Kafka topics when it is instantiated.
         var producerConfig = new ProducerConfig { // ProducerConfig is method provided by the Confluent.Kafka library that represents the configuration settings for a Kafka producer. It allows you to specify various properties that control the behavior of the producer, such as the Kafka broker addresses, security settings, and other options. In this case, a new instance of ProducerConfig is being created and initialized with specific settings.
-            
-                BootstrapServers = config["Kafka:BootstrapServers"] // BootstrapServers is a property of the ProducerConfig class that specifies the Kafka broker addresses that the producer will connect to. In this case, it is being set to the value retrieved from the configuration using the key "Kafka:BootstrapServers". This allows the producer to know where to send messages in the Kafka cluster.
+
+                BootstrapServers = config["Kafka:BootstrapServers"], // BootstrapServers is a property of the ProducerConfig class that specifies the Kafka broker addresses that the producer will connect to. In this case, it is being set to the value retrieved from the configuration using the key "Kafka:BootstrapServers". This allows the producer to know where to send messages in the Kafka cluster.
+
+                // Security settings, read the same way goride-notification's consumer reads them.
+                // Local Kafka needs none of these (Plaintext). Azure Event Hubs' Kafka endpoint needs:
+                //   SecurityProtocol=SaslSsl, SaslMechanism=Plain,
+                //   SaslUsername=$ConnectionString, SaslPassword=<the Event Hubs connection string>.
+                SecurityProtocol = Enum.Parse<SecurityProtocol>(config["Kafka:SecurityProtocol"] ?? "Plaintext", ignoreCase: true),
+                SaslMechanism = !string.IsNullOrEmpty(config["Kafka:SaslMechanism"])
+                    ? Enum.Parse<SaslMechanism>(config["Kafka:SaslMechanism"]!, ignoreCase: true)
+                    : null,
+                SaslUsername = config["Kafka:SaslUsername"],
+                SaslPassword = config["Kafka:SaslPassword"],
+
+                // PublishAsync awaits delivery. The default (5 minutes) would leave a ride request
+                // hanging that long if the broker is unreachable or misconfigured; fail fast so
+                // the caller's error handling runs.
+                MessageTimeoutMs = 10000,
 
         };
         _producer = new ProducerBuilder<string, string>(producerConfig).Build(); // ProducerBuilder is a class provided by the Confluent.Kafka library that is used to create instances of Kafka producers. It takes a configuration object (in this case, ProducerConfig) as a parameter and provides methods to customize the producer's behavior. The Build() method is called to create an instance of the producer based on the specified configuration.

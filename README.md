@@ -172,3 +172,14 @@ Invoke-RestMethod -Uri "http://localhost:8080/fare/estimate" -Method Post -Conte
 Invoke-RestMethod -Uri "http://localhost:8080/fare/estimate" -Method Post -ContentType "application/json" -Body '{"startLat":6.9344,"startLng":79.8428,"endLat":6.8905}'
 
 ---------------------------------------------------
+
+
+
+
+
+
+
+Frontend ──► FindNearbyDriversRequest ──► DriverMatchingService ──► FindNearbyDriversResponse ──► Frontend
+                                            │        │                     └─ list of MatchedDriver
+            NearbyDriverLocation ◄──────────┘        └──────► ActiveDriver (already existed)
+            (from goride-location)                            (from identity-auth)
