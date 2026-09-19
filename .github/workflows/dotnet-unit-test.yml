@@ -1,4 +1,4 @@
-name: .NET CI Pipeline
+name: CI Unit Test Pipeline
 
 on:
   push:
