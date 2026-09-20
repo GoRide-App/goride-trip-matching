@@ -10,4 +10,7 @@ public class MatchingOptions
 
     /// <summary>Cap on how many nearest drivers a single request matches.</summary>
     public int MaxDrivers { get; set; } = 10;
+
+    /// <summary>How long a driver has to accept an offer before it lapses (same 20s as the frontend's DRIVER_OFFER_TTL_SECONDS).</summary>
+    public int OfferTtlSeconds { get; set; } = 20;
 }
