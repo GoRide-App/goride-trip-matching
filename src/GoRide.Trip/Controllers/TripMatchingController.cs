@@ -31,11 +31,19 @@ public class TripMatchingController : ControllerBase
     [HttpPost("nearby-drivers")]
     [ProducesResponseType(typeof(FindNearbyDriversResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status503ServiceUnavailable)]
     public async Task<IActionResult> FindNearbyDrivers([FromBody] FindNearbyDriversRequest request)
     {
         if (Validate(request) is { } invalid) return invalid;
 
-        return Ok(await _matchingService.FindNearbyDriversAsync(request));
+        try
+        {
+            return Ok(await _matchingService.FindNearbyDriversAsync(request));
+        }
+        catch (HttpRequestException ex)
+        {
+            return DependencyUnavailable(ex, request.TripId);
+        }
     }
 
     /// <summary>
@@ -65,12 +73,48 @@ public class TripMatchingController : ControllerBase
 
             return Ok(result);
         }
-        catch (Exception ex) when (ex is MySqlException or DeliveryFailedException)
+        catch (MySqlException ex)
         {
             _logger.LogError(ex, "Could not deliver ride request for trip {TripId}.", request.TripId);
             return StatusCode(StatusCodes.Status503ServiceUnavailable,
                 new { error = "Could not deliver the ride request right now. Please try again." });
         }
+        catch (HttpRequestException ex)
+        {
+            return DependencyUnavailable(ex, request.TripId);
+        }
+    }
+
+    /// <summary>
+    /// Where a delivered ride request stands: Searching, Accepted (with the driver), or
+    /// NoDriver. The rider's app polls this. 404 if nothing was ever offered for the trip.
+    /// </summary>
+    [HttpGet("ride-requests/{tripId}")]
+    [ProducesResponseType(typeof(RideRequestStatus), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status503ServiceUnavailable)]
+    public async Task<IActionResult> GetRideRequestStatus(string tripId)
+    {
+        try
+        {
+            var status = await _rideRequestService.GetStatusAsync(tripId);
+            return status is null ? NotFound(new { error = "No ride request found for that trip." }) : Ok(status);
+        }
+        catch (MySqlException ex)
+        {
+            _logger.LogError(ex, "Could not load ride request status for trip {TripId}.", tripId);
+            return StatusCode(StatusCodes.Status503ServiceUnavailable,
+                new { error = "Could not reach the offers store right now. Please try again." });
+        }
+    }
+
+    // identity-auth or goride-location said no (or couldn't be reached). That is an infrastructure
+    // problem, not "no drivers nearby", so say so instead of returning a bare 500.
+    private ObjectResult DependencyUnavailable(HttpRequestException ex, string? tripId)
+    {
+        _logger.LogError(ex, "A service needed to find drivers failed (trip {TripId}): {Message}", tripId, ex.Message);
+        return StatusCode(StatusCodes.Status503ServiceUnavailable,
+            new { error = "A service needed to find drivers is unavailable right now. Please try again." });
     }
 
     private IActionResult? Validate(FindNearbyDriversRequest request)
