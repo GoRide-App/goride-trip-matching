@@ -12,6 +12,9 @@ builder.Services.AddSwaggerGen();
 builder.Services.AddScoped<IVehicleTypeRepository, VehicleTypeRepository>();
 builder.Services.AddScoped<IFareCalculationService, FareCalculationService>();
 builder.Services.AddScoped<IDriverMatchingService, DriverMatchingService>();
+builder.Services.AddScoped<IDriverOfferRepository, DriverOfferRepository>();
+builder.Services.AddScoped<IRideRequestService, RideRequestService>();
+builder.Services.AddScoped<IDriverOfferService, DriverOfferService>();
 builder.Services.Configure<MatchingOptions>(builder.Configuration.GetSection(MatchingOptions.SectionName));
 
 // ---- Database (ADO.NET connection factory — see Data/MySqlConnectionFactory.cs) ----
@@ -36,6 +39,7 @@ builder.Services.AddHttpClient<ILocationClient, LocationClient>(client =>
 
 // ---- Kafka producer service (singleton) ----
 builder.Services.AddSingleton<KafkaProducerService>();  // One shared Kafka connection for the whole app's lifetime, not a new one per request.
+builder.Services.AddSingleton<ITripEventPublisher, TripEventPublisher>();  // Publishes trip events to the topic goride-notification consumes.
 
 // ---- CORS: allow the Next.js frontend (local dev + Vercel-hosted) to call this API ----
 var allowedOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>()
@@ -53,6 +57,21 @@ builder.Services.AddCors(options =>
 });
 
 var app = builder.Build();
+
+// ---- Ensure driver_offers exists (no migration tool on this service — schema is created
+// idempotently on startup). A failure is logged but doesn't stop the app: fare estimates
+// and the plain driver search don't need this table.
+using (var scope = app.Services.CreateScope())
+{
+    try
+    {
+        await scope.ServiceProvider.GetRequiredService<IDriverOfferRepository>().EnsureSchemaAsync();
+    }
+    catch (Exception ex)
+    {
+        app.Logger.LogError(ex, "Failed to ensure driver_offers schema exists.");
+    }
+}
 
 // ---- Swagger UI (dev only — don't expose this publicly in production) ----
 if (app.Environment.IsDevelopment())
