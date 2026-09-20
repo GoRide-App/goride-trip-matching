@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using Moq;
 using Xunit;
 using GoRide.Trip.Data;
@@ -14,10 +15,13 @@ public class RideRequestServiceTests
     private readonly Mock<IDriverMatchingService> _matching = new();
     private readonly Mock<IDriverOfferRepository> _offers = new();
     private readonly Mock<ITripEventPublisher> _publisher = new();
+    private readonly Mock<IActiveDriversService> _activeDrivers = new();
     private readonly List<string> _callOrder = new();
 
     private RideRequestService CreateService() =>
-        new(_matching.Object, _offers.Object, _publisher.Object, NullLogger<RideRequestService>.Instance);
+        new(_matching.Object, _offers.Object, _publisher.Object, _activeDrivers.Object,
+            Options.Create(new MatchingOptions { OfferTtlSeconds = 20 }),
+            NullLogger<RideRequestService>.Instance);
 
     private static FindNearbyDriversRequest Request() => new()
     {
@@ -60,7 +64,8 @@ public class RideRequestServiceTests
 
         Assert.Null(error);
         Assert.False(result!.Matched);
-        _offers.Verify(o => o.CreatePendingAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<double>()), Times.Never);
+        _offers.Verify(o => o.CreatePendingAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<double>(),
+            It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<decimal?>()), Times.Never);
         _publisher.Verify(p => p.PublishAsync(It.IsAny<TripEvent>()), Times.Never);
     }
 
@@ -78,8 +83,9 @@ public class RideRequestServiceTests
         Assert.True(result!.Matched);
         Assert.Equal(new[] { "d1", "d2" }, result.Drivers.Select(d => d.DriverId));
 
-        _offers.Verify(o => o.CreatePendingAsync("trip-1", "d1", "rider-1", 0.4), Times.Once);
-        _offers.Verify(o => o.CreatePendingAsync("trip-1", "d2", "rider-1", 1.2), Times.Once);
+        // The trip details are stored on the offer so the driver can be shown them later.
+        _offers.Verify(o => o.CreatePendingAsync("trip-1", "d1", "rider-1", 0.4, "Colombo Fort", "Bambalapitiya", 480m), Times.Once);
+        _offers.Verify(o => o.CreatePendingAsync("trip-1", "d2", "rider-1", 1.2, "Colombo Fort", "Bambalapitiya", 480m), Times.Once);
 
         Assert.Equal(2, published.Count);
         var evt = published.Single(e => e.DriverId == "d1");
@@ -97,7 +103,8 @@ public class RideRequestServiceTests
     public async Task OfferIsRecorded_BeforeTheEventIsPublished()
     {
         MatchingReturns(Driver("d1"));
-        _offers.Setup(o => o.CreatePendingAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<double>()))
+        _offers.Setup(o => o.CreatePendingAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<double>(),
+                It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<decimal?>()))
             .Callback(() => _callOrder.Add("offer")).Returns(Task.CompletedTask);
         _publisher.Setup(p => p.PublishAsync(It.IsAny<TripEvent>()))
             .Callback(() => _callOrder.Add("publish")).Returns(Task.CompletedTask);
@@ -108,26 +115,44 @@ public class RideRequestServiceTests
     }
 
     [Fact]
-    public async Task FailedPublish_MarksThatOfferFailed_AndExcludesDriver_ButOthersStillDeliver()
+    public async Task FailedPublish_DoesNotFailTheRequest_TheDriverStillHasTheOffer()
     {
+        // The offer row is what the driver's app reads, so a Kafka outage must not stop matching.
         MatchingReturns(Driver("d1"), Driver("d2"));
         _publisher.Setup(p => p.PublishAsync(It.Is<TripEvent>(e => e.DriverId == "d1"))).ThrowsAsync(new Exception("kafka down"));
         _publisher.Setup(p => p.PublishAsync(It.Is<TripEvent>(e => e.DriverId == "d2"))).Returns(Task.CompletedTask);
 
-        var (result, _) = await CreateService().DeliverAsync(Request());
+        var (result, error) = await CreateService().DeliverAsync(Request());
 
-        Assert.Equal(new[] { "d2" }, result!.Drivers.Select(d => d.DriverId));
-        _offers.Verify(o => o.MarkFailedAsync("trip-1", "d1"), Times.Once);
-        _offers.Verify(o => o.MarkFailedAsync("trip-1", "d2"), Times.Never);
+        Assert.Null(error);
+        Assert.True(result!.Matched);
+        Assert.Equal(new[] { "d1", "d2" }, result.Drivers.Select(d => d.DriverId));
+        _offers.Verify(o => o.CreatePendingAsync("trip-1", "d1", "rider-1", It.IsAny<double>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<decimal?>()), Times.Once);
     }
 
     [Fact]
-    public async Task AllPublishesFail_ThrowsDeliveryFailed()
+    public async Task KafkaCompletelyDown_StillMatchesAndOffers()
     {
         MatchingReturns(Driver("d1"), Driver("d2"));
         _publisher.Setup(p => p.PublishAsync(It.IsAny<TripEvent>())).ThrowsAsync(new Exception("kafka down"));
 
-        await Assert.ThrowsAsync<DeliveryFailedException>(() => CreateService().DeliverAsync(Request()));
+        var (result, error) = await CreateService().DeliverAsync(Request());
+
+        Assert.Null(error);
+        Assert.True(result!.Matched);
+        Assert.Equal(2, result.Drivers.Count);
+    }
+
+    [Fact]
+    public async Task OfferCannotBeRecorded_TheRequestFails()
+    {
+        // Without the offer row no driver could ever see or accept the request, so this must surface.
+        MatchingReturns(Driver("d1"));
+        _offers.Setup(o => o.CreatePendingAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<double>(),
+                It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<decimal?>()))
+            .ThrowsAsync(new InvalidOperationException("db down"));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => CreateService().DeliverAsync(Request()));
     }
 
     [Fact]
@@ -150,5 +175,79 @@ public class RideRequestServiceTests
         Assert.Equal("d", root.GetProperty("driverId").GetString());
         Assert.True(root.TryGetProperty("eventId", out _));
         Assert.Equal("Fort", root.GetProperty("payload").GetProperty("pickupLocation").GetString());
+    }
+
+    // ---- GetStatusAsync (rider polls this) ----
+
+    private static DriverOffer OfferWith(string driverId, string status, DateTime createdAt) =>
+        new() { TripId = "trip-1", DriverId = driverId, Status = status, CreatedAt = createdAt };
+
+    [Fact]
+    public async Task Status_NoOffersEver_ReturnsNull()
+    {
+        _offers.Setup(o => o.GetOffersForTripAsync("trip-1")).ReturnsAsync(new List<DriverOffer>());
+
+        Assert.Null(await CreateService().GetStatusAsync("trip-1"));
+    }
+
+    [Fact]
+    public async Task Status_OpenPendingOffer_IsSearching()
+    {
+        _offers.Setup(o => o.GetOffersForTripAsync("trip-1")).ReturnsAsync(new List<DriverOffer>
+        {
+            OfferWith("d1", "Pending", DateTime.UtcNow.AddSeconds(-5)),
+        });
+
+        var status = await CreateService().GetStatusAsync("trip-1");
+
+        Assert.Equal("Searching", status!.Status);
+        Assert.Null(status.Driver);
+    }
+
+    [Fact]
+    public async Task Status_AllOffersLapsedOrFailed_IsNoDriver()
+    {
+        _offers.Setup(o => o.GetOffersForTripAsync("trip-1")).ReturnsAsync(new List<DriverOffer>
+        {
+            OfferWith("d1", "Pending", DateTime.UtcNow.AddSeconds(-60)),   // Pending but past its 20s window
+            OfferWith("d2", "Declined", DateTime.UtcNow.AddSeconds(-2)),
+        });
+
+        Assert.Equal("NoDriver", (await CreateService().GetStatusAsync("trip-1"))!.Status);
+    }
+
+    [Fact]
+    public async Task Status_AcceptedOffer_ReturnsTheDriverWithVehicleDetails()
+    {
+        _offers.Setup(o => o.GetOffersForTripAsync("trip-1")).ReturnsAsync(new List<DriverOffer>
+        {
+            OfferWith("d1", "Accepted", DateTime.UtcNow.AddSeconds(-8)),
+            OfferWith("d2", "Pending", DateTime.UtcNow.AddSeconds(-8)),
+        });
+        _activeDrivers.Setup(a => a.GetActiveDriversAsync(null)).ReturnsAsync(new List<ActiveDriver>
+        {
+            new() { DriverId = "d1", VehiclePlate = "CAB-4521", VehicleTypeCode = "TUK", VehicleMake = "Bajaj", VehicleModel = "RE" },
+        });
+
+        var status = await CreateService().GetStatusAsync("trip-1");
+
+        Assert.Equal("Accepted", status!.Status);
+        Assert.Equal("d1", status.Driver!.DriverId);
+        Assert.Equal("CAB-4521", status.Driver.VehiclePlate);
+    }
+
+    [Fact]
+    public async Task Status_AcceptedButIdentityDown_StillReportsTheDriverId()
+    {
+        _offers.Setup(o => o.GetOffersForTripAsync("trip-1")).ReturnsAsync(new List<DriverOffer>
+        {
+            OfferWith("d1", "Accepted", DateTime.UtcNow),
+        });
+        _activeDrivers.Setup(a => a.GetActiveDriversAsync(null)).ThrowsAsync(new HttpRequestException("identity down"));
+
+        var status = await CreateService().GetStatusAsync("trip-1");
+
+        Assert.Equal("Accepted", status!.Status);
+        Assert.Equal("d1", status.Driver!.DriverId);
     }
 }

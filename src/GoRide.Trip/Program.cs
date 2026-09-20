@@ -14,6 +14,7 @@ builder.Services.AddScoped<IFareCalculationService, FareCalculationService>();
 builder.Services.AddScoped<IDriverMatchingService, DriverMatchingService>();
 builder.Services.AddScoped<IDriverOfferRepository, DriverOfferRepository>();
 builder.Services.AddScoped<IRideRequestService, RideRequestService>();
+builder.Services.AddScoped<IDriverOfferService, DriverOfferService>();
 builder.Services.Configure<MatchingOptions>(builder.Configuration.GetSection(MatchingOptions.SectionName));
 
 // ---- Database (ADO.NET connection factory — see Data/MySqlConnectionFactory.cs) ----

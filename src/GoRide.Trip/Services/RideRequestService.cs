@@ -1,42 +1,49 @@
 using GoRide.Trip.Data;
 using GoRide.Trip.Events;
 using GoRide.Trip.Models;
+using Microsoft.Extensions.Options;
 
 namespace GoRide.Trip.Services;
 
-/// <summary>Matches were found but the request couldn't be delivered to any of them.</summary>
-public class DeliveryFailedException : Exception
-{
-    public DeliveryFailedException(string message, Exception? inner = null) : base(message, inner) { }
-}
-
 public interface IRideRequestService
 {
-    /// <returns>The drivers the request was delivered to, or an Error when the trip already has an accepted driver.</returns>
+    /// <returns>The drivers the request was offered to, or an Error when the trip already has an accepted driver.</returns>
     Task<(FindNearbyDriversResponse? Result, string? Error)> DeliverAsync(FindNearbyDriversRequest request);
+
+    /// <summary>Where a delivered request stands, or null when nothing was ever offered for this trip.</summary>
+    Task<RideRequestStatus?> GetStatusAsync(string tripId);
 }
 
 /// <summary>
 /// Finds nearby available drivers (see DriverMatchingService), records a Pending
 /// offer for each, and publishes a RIDE_REQUESTED event per driver to Kafka —
 /// goride-notification's consumer turns those into push notifications.
+/// The offer row is what makes a request reach a driver (their app polls for it);
+/// the Kafka event is an extra push on top, so failing to publish it is logged
+/// but does not fail the request.
 /// </summary>
 public class RideRequestService : IRideRequestService
 {
     private readonly IDriverMatchingService _matching;
     private readonly IDriverOfferRepository _offers;
     private readonly ITripEventPublisher _publisher;
+    private readonly IActiveDriversService _activeDrivers;
+    private readonly MatchingOptions _options;
     private readonly ILogger<RideRequestService> _logger;
 
     public RideRequestService(
         IDriverMatchingService matching,
         IDriverOfferRepository offers,
         ITripEventPublisher publisher,
+        IActiveDriversService activeDrivers,
+        IOptions<MatchingOptions> options,
         ILogger<RideRequestService> logger)
     {
         _matching = matching;
         _offers = offers;
         _publisher = publisher;
+        _activeDrivers = activeDrivers;
+        _options = options.Value;
         _logger = logger;
     }
 
@@ -52,25 +59,55 @@ public class RideRequestService : IRideRequestService
         if (!search.Matched)
             return (search, null);
 
-        var delivered = new List<MatchedDriver>();
-        var outcomes = await Task.WhenAll(search.Drivers.Select(d => DeliverToDriverAsync(request, tripId, riderId, d)));
-        for (var i = 0; i < outcomes.Length; i++)
-            if (outcomes[i]) delivered.Add(search.Drivers[i]);
+        await Task.WhenAll(search.Drivers.Select(d => OfferToDriverAsync(request, tripId, riderId, d)));
 
-        if (delivered.Count == 0)
-            throw new DeliveryFailedException($"Found {search.Drivers.Count} driver(s) for trip {tripId} but could not deliver the request to any of them.");
+        _logger.LogInformation("Offered ride request for trip {TripId} to {Count} driver(s).", tripId, search.Drivers.Count);
 
-        _logger.LogInformation("Delivered ride request for trip {TripId} to {Delivered}/{Matched} driver(s).",
-            tripId, delivered.Count, search.Drivers.Count);
-
-        return (new FindNearbyDriversResponse { Matched = true, RadiusKm = search.RadiusKm, Drivers = delivered }, null);
+        return (search, null);
     }
 
-    private async Task<bool> DeliverToDriverAsync(FindNearbyDriversRequest request, string tripId, string riderId, MatchedDriver driver)
+    public async Task<RideRequestStatus?> GetStatusAsync(string tripId)
     {
-        // Record the offer BEFORE publishing, so a driver who acts on the
-        // notification immediately can never beat the row into existence.
-        await _offers.CreatePendingAsync(tripId, driver.DriverId, riderId, driver.DistanceKm);
+        var offers = await _offers.GetOffersForTripAsync(tripId);
+        if (offers.Count == 0) return null;
+
+        var accepted = offers.FirstOrDefault(o => o.Status == "Accepted");
+        if (accepted is not null)
+        {
+            return new RideRequestStatus
+            {
+                TripId = tripId,
+                Status = "Accepted",
+                // Vehicle details come from identity-auth; if that's down the rider still learns a driver accepted.
+                Driver = await FindDriverAsync(accepted.DriverId) ?? new ActiveDriver { DriverId = accepted.DriverId },
+            };
+        }
+
+        var now = DateTime.UtcNow;
+        var stillOpen = offers.Any(o => o.Status == "Pending" && o.CreatedAt.AddSeconds(_options.OfferTtlSeconds) > now);
+        return new RideRequestStatus { TripId = tripId, Status = stillOpen ? "Searching" : "NoDriver" };
+    }
+
+    private async Task<ActiveDriver?> FindDriverAsync(string driverId)
+    {
+        try
+        {
+            var drivers = await _activeDrivers.GetActiveDriversAsync(null);
+            return drivers.FirstOrDefault(d => d.DriverId == driverId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Could not look up vehicle details for driver {DriverId}.", driverId);
+            return null;
+        }
+    }
+
+    private async Task OfferToDriverAsync(FindNearbyDriversRequest request, string tripId, string riderId, MatchedDriver driver)
+    {
+        // The offer is what a driver's app sees, so it is recorded first. If that fails the whole
+        // request fails, because nobody could ever act on it.
+        await _offers.CreatePendingAsync(tripId, driver.DriverId, riderId, driver.DistanceKm,
+            request.PickupLocation, request.DropoffLocation, request.Fare);
 
         try
         {
@@ -88,14 +125,11 @@ public class RideRequestService : IRideRequestService
                     VehicleType = driver.VehicleTypeCode,
                 },
             });
-            return true;
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Failed to publish RIDE_REQUESTED for trip {TripId} to driver {DriverId}.", tripId, driver.DriverId);
-            try { await _offers.MarkFailedAsync(tripId, driver.DriverId); }
-            catch (Exception markEx) { _logger.LogWarning(markEx, "Could not mark offer failed for trip {TripId}, driver {DriverId}.", tripId, driver.DriverId); }
-            return false;
+            _logger.LogWarning(ex, "Could not publish RIDE_REQUESTED for trip {TripId} to driver {DriverId}; the driver can still see the offer in the app.",
+                tripId, driver.DriverId);
         }
     }
 }
