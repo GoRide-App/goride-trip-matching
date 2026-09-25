@@ -40,7 +40,7 @@ public class TripMatchingController : ControllerBase
         {
             return Ok(await _matchingService.FindNearbyDriversAsync(request));
         }
-        catch (HttpRequestException ex)
+        catch (Exception ex) when (ex is HttpRequestException or InvalidOperationException)
         {
             return DependencyUnavailable(ex, request.TripId);
         }
@@ -79,7 +79,7 @@ public class TripMatchingController : ControllerBase
             return StatusCode(StatusCodes.Status503ServiceUnavailable,
                 new { error = "Could not deliver the ride request right now. Please try again." });
         }
-        catch (HttpRequestException ex)
+        catch (Exception ex) when (ex is HttpRequestException or InvalidOperationException)
         {
             return DependencyUnavailable(ex, request.TripId);
         }
@@ -108,9 +108,10 @@ public class TripMatchingController : ControllerBase
         }
     }
 
-    // identity-auth or goride-location said no (or couldn't be reached). That is an infrastructure
-    // problem, not "no drivers nearby", so say so instead of returning a bare 500.
-    private ObjectResult DependencyUnavailable(HttpRequestException ex, string? tripId)
+    // identity-auth or goride-location said no, couldn't be reached, or this service itself is missing
+    // required config (e.g. InternalServices:ApiKey) to call them. All of that is an infrastructure
+    // problem, not "no drivers nearby", so say so instead of returning a bare, unexplained 500.
+    private ObjectResult DependencyUnavailable(Exception ex, string? tripId)
     {
         _logger.LogError(ex, "A service needed to find drivers failed (trip {TripId}): {Message}", tripId, ex.Message);
         return StatusCode(StatusCodes.Status503ServiceUnavailable,
