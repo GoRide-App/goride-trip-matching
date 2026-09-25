@@ -118,6 +118,24 @@ public class DriverOfferServiceTests
     }
 
     [Fact]
+    public async Task Accept_LosingDriverOfARaceToBeAccepted_ReturnsNotAvailable()
+    {
+        // SCRUM-62: two drivers accept the same trip at the same instant. The repository's
+        // TryAcceptAsync is what actually decides the race (via the trip_claims table's PRIMARY
+        // KEY on trip_id) -- from here, a driver who lost that race looks exactly like any other
+        // "couldn't accept": TryAcceptAsync returns null, and the offer is already Accepted by
+        // whoever won when we look it up to explain why.
+        _offers.Setup(o => o.TryAcceptAsync("trip-1", "d2", Ttl)).ReturnsAsync((DriverOffer?)null);
+        _offers.Setup(o => o.GetStatusAsync("trip-1", "d2")).ReturnsAsync("Accepted");
+
+        var (outcome, offer) = await CreateService().AcceptAsync("trip-1", "d2");
+
+        Assert.Equal(AcceptOutcome.NotAvailable, outcome);
+        Assert.Null(offer);
+        _publisher.Verify(p => p.PublishAsync(It.IsAny<TripEvent>()), Times.Never);
+    }
+
+    [Fact]
     public async Task Accept_StillSucceeds_WhenTheEventCannotBePublished()
     {
         // The accept is already committed; failing to notify the rider must not undo or hide it.

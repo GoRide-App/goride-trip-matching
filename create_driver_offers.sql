@@ -72,3 +72,22 @@
 -- -- 3. Only if trip_svc has rights per table rather than on all of trip_db:
 -- -- ---------------------------------------------------------------------------
 -- -- GRANT SELECT, INSERT, UPDATE ON trip_db.driver_offers TO 'trip_svc'@'%';
+
+-- ---------------------------------------------------------------------------
+-- SCRUM-62: only the first valid driver acceptance succeeds. trip_id is this
+-- table's PRIMARY KEY, so InnoDB itself guarantees at most one driver can ever
+-- successfully INSERT a claim row for a given trip, even if several accept at
+-- the exact same instant -- see DriverOfferRepository.TryAcceptAsync. Run
+-- this against trip_db with the admin login, same as driver_offers above.
+-- ---------------------------------------------------------------------------
+-- USE trip_db;
+
+-- CREATE TABLE IF NOT EXISTS trip_claims (
+--     trip_id    VARCHAR(64) NOT NULL,
+--     driver_id  VARCHAR(64) NOT NULL,
+--     claimed_at DATETIME(3) NOT NULL,
+--     PRIMARY KEY (trip_id)
+-- );
+
+-- Only if trip_svc has rights per table rather than on all of trip_db:
+-- GRANT SELECT, INSERT, DELETE ON trip_db.trip_claims TO 'trip_svc'@'%';
