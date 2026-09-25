@@ -76,6 +76,41 @@ public class DriverOffersController : ControllerBase
         }
     }
 
+    /// <summary>
+    /// The driver advances their accepted trip one stage: Arrived, then InProgress, then Completed.
+    /// 200 with the updated offer; 404 if this driver has no (won) offer for the trip; 409 if the
+    /// requested stage isn't the one immediately after its current status.
+    /// </summary>
+    [HttpPost("{tripId}/status")]
+    [ProducesResponseType(typeof(DriverOffer), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    [ProducesResponseType(StatusCodes.Status503ServiceUnavailable)]
+    public async Task<IActionResult> UpdateStatus(string tripId, [FromBody] UpdateTripStatusRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request.DriverId))
+            return BadRequest(new { error = "driverId is required." });
+        if (request.Action is not ("Arrived" or "InProgress" or "Completed"))
+            return BadRequest(new { error = "action must be one of: Arrived, InProgress, Completed." });
+
+        try
+        {
+            var (outcome, offer) = await _offerService.UpdateStatusAsync(tripId, request.DriverId, request.Action);
+            return outcome switch
+            {
+                StatusUpdateOutcome.Updated => Ok(offer),
+                StatusUpdateOutcome.NotFound => NotFound(new { error = "This driver has no accepted trip with that id." }),
+                _ => Conflict(new { error = "This trip isn't ready for that step yet." }),
+            };
+        }
+        catch (MySqlException ex)
+        {
+            _logger.LogError(ex, "Could not update status for trip {TripId}, driver {DriverId}.", tripId, request.DriverId);
+            return Unavailable();
+        }
+    }
+
     private ObjectResult Unavailable() =>
         StatusCode(StatusCodes.Status503ServiceUnavailable,
             new { error = "Could not reach the offers store right now. Please try again." });
