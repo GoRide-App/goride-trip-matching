@@ -14,11 +14,19 @@ public class DriverOffer
     public double DistanceKm { get; set; }
 
     public string? PickupLocation { get; set; }
+    public double? PickupLat { get; set; }
+    public double? PickupLng { get; set; }
     public string? DropoffLocation { get; set; }
+    public double? DropoffLat { get; set; }
+    public double? DropoffLng { get; set; }
     public decimal? Fare { get; set; }
 
     public DateTime CreatedAt { get; set; }
 
     /// <summary>When a Pending offer stops being acceptable (CreatedAt + the offer TTL).</summary>
     public DateTime ExpiresAt { get; set; }
+
+    public DateTime? ArrivedAt { get; set; }
+    public DateTime? StartedAt { get; set; }
+    public DateTime? CompletedAt { get; set; }
 }

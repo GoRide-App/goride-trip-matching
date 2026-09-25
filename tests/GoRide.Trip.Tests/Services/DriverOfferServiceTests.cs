@@ -145,4 +145,56 @@ public class DriverOfferServiceTests
         Assert.NotNull(published);
         Assert.Null(published!.Payload.VehiclePlate);   // just left blank
     }
+
+    // ---- UpdateStatusAsync (SCRUM-82) ----
+
+    [Theory]
+    [InlineData("Arrived", "Accepted")]
+    [InlineData("InProgress", "Arrived")]
+    [InlineData("Completed", "InProgress")]
+    public async Task UpdateStatus_ValidNextStage_Advances(string action, string fromStatus)
+    {
+        var updated = AcceptedOffer();
+        updated.Status = action;
+        _offers.Setup(o => o.TryAdvanceStatusAsync("trip-1", "d1", fromStatus, action)).ReturnsAsync(updated);
+
+        var (outcome, offer) = await CreateService().UpdateStatusAsync("trip-1", "d1", action);
+
+        Assert.Equal(StatusUpdateOutcome.Updated, outcome);
+        Assert.Equal(action, offer!.Status);
+    }
+
+    [Fact]
+    public async Task UpdateStatus_SkippingAStage_IsRejectedAsInvalidTransition()
+    {
+        // Trying to jump straight to InProgress from Accepted (skipping Arrived).
+        _offers.Setup(o => o.TryAdvanceStatusAsync("trip-1", "d1", "Arrived", "InProgress")).ReturnsAsync((DriverOffer?)null);
+        _offers.Setup(o => o.GetStatusAsync("trip-1", "d1")).ReturnsAsync("Accepted");
+
+        var (outcome, offer) = await CreateService().UpdateStatusAsync("trip-1", "d1", "InProgress");
+
+        Assert.Equal(StatusUpdateOutcome.InvalidTransition, outcome);
+        Assert.Null(offer);
+    }
+
+    [Fact]
+    public async Task UpdateStatus_NoSuchOffer_ReturnsNotFound()
+    {
+        _offers.Setup(o => o.TryAdvanceStatusAsync("trip-1", "d1", "Accepted", "Arrived")).ReturnsAsync((DriverOffer?)null);
+        _offers.Setup(o => o.GetStatusAsync("trip-1", "d1")).ReturnsAsync((string?)null);
+
+        var (outcome, _) = await CreateService().UpdateStatusAsync("trip-1", "d1", "Arrived");
+
+        Assert.Equal(StatusUpdateOutcome.NotFound, outcome);
+    }
+
+    [Fact]
+    public async Task UpdateStatus_UnknownAction_IsRejectedWithoutTouchingTheRepository()
+    {
+        var (outcome, offer) = await CreateService().UpdateStatusAsync("trip-1", "d1", "Cancelled");
+
+        Assert.Equal(StatusUpdateOutcome.InvalidTransition, outcome);
+        Assert.Null(offer);
+        _offers.Verify(o => o.TryAdvanceStatusAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()), Times.Never);
+    }
 }

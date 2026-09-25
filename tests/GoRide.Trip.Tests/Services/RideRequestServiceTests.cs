@@ -32,6 +32,8 @@ public class RideRequestServiceTests
         VehicleTypeCode = "TUK",
         PickupLocation = "Colombo Fort",
         DropoffLocation = "Bambalapitiya",
+        DropoffLat = 6.8905,
+        DropoffLng = 79.8565,
         Fare = 480m,
     };
 
@@ -65,7 +67,8 @@ public class RideRequestServiceTests
         Assert.Null(error);
         Assert.False(result!.Matched);
         _offers.Verify(o => o.CreatePendingAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<double>(),
-            It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<decimal?>()), Times.Never);
+            It.IsAny<string?>(), It.IsAny<double?>(), It.IsAny<double?>(),
+            It.IsAny<string?>(), It.IsAny<double?>(), It.IsAny<double?>(), It.IsAny<decimal?>()), Times.Never);
         _publisher.Verify(p => p.PublishAsync(It.IsAny<TripEvent>()), Times.Never);
     }
 
@@ -83,9 +86,10 @@ public class RideRequestServiceTests
         Assert.True(result!.Matched);
         Assert.Equal(new[] { "d1", "d2" }, result.Drivers.Select(d => d.DriverId));
 
-        // The trip details are stored on the offer so the driver can be shown them later.
-        _offers.Verify(o => o.CreatePendingAsync("trip-1", "d1", "rider-1", 0.4, "Colombo Fort", "Bambalapitiya", 480m), Times.Once);
-        _offers.Verify(o => o.CreatePendingAsync("trip-1", "d2", "rider-1", 1.2, "Colombo Fort", "Bambalapitiya", 480m), Times.Once);
+        // The trip details (including coordinates) are stored on the offer so the driver's own
+        // device can show them later, without ever needing the rider's local state.
+        _offers.Verify(o => o.CreatePendingAsync("trip-1", "d1", "rider-1", 0.4, "Colombo Fort", 6.9344, 79.8428, "Bambalapitiya", 6.8905, 79.8565, 480m), Times.Once);
+        _offers.Verify(o => o.CreatePendingAsync("trip-1", "d2", "rider-1", 1.2, "Colombo Fort", 6.9344, 79.8428, "Bambalapitiya", 6.8905, 79.8565, 480m), Times.Once);
 
         Assert.Equal(2, published.Count);
         var evt = published.Single(e => e.DriverId == "d1");
@@ -104,7 +108,8 @@ public class RideRequestServiceTests
     {
         MatchingReturns(Driver("d1"));
         _offers.Setup(o => o.CreatePendingAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<double>(),
-                It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<decimal?>()))
+                It.IsAny<string?>(), It.IsAny<double?>(), It.IsAny<double?>(),
+                It.IsAny<string?>(), It.IsAny<double?>(), It.IsAny<double?>(), It.IsAny<decimal?>()))
             .Callback(() => _callOrder.Add("offer")).Returns(Task.CompletedTask);
         _publisher.Setup(p => p.PublishAsync(It.IsAny<TripEvent>()))
             .Callback(() => _callOrder.Add("publish")).Returns(Task.CompletedTask);
@@ -127,7 +132,9 @@ public class RideRequestServiceTests
         Assert.Null(error);
         Assert.True(result!.Matched);
         Assert.Equal(new[] { "d1", "d2" }, result.Drivers.Select(d => d.DriverId));
-        _offers.Verify(o => o.CreatePendingAsync("trip-1", "d1", "rider-1", It.IsAny<double>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<decimal?>()), Times.Once);
+        _offers.Verify(o => o.CreatePendingAsync("trip-1", "d1", "rider-1", It.IsAny<double>(),
+            It.IsAny<string?>(), It.IsAny<double?>(), It.IsAny<double?>(),
+            It.IsAny<string?>(), It.IsAny<double?>(), It.IsAny<double?>(), It.IsAny<decimal?>()), Times.Once);
     }
 
     [Fact]
@@ -149,7 +156,8 @@ public class RideRequestServiceTests
         // Without the offer row no driver could ever see or accept the request, so this must surface.
         MatchingReturns(Driver("d1"));
         _offers.Setup(o => o.CreatePendingAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<double>(),
-                It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<decimal?>()))
+                It.IsAny<string?>(), It.IsAny<double?>(), It.IsAny<double?>(),
+                It.IsAny<string?>(), It.IsAny<double?>(), It.IsAny<double?>(), It.IsAny<decimal?>()))
             .ThrowsAsync(new InvalidOperationException("db down"));
 
         await Assert.ThrowsAsync<InvalidOperationException>(() => CreateService().DeliverAsync(Request()));
@@ -234,6 +242,34 @@ public class RideRequestServiceTests
         Assert.Equal("Accepted", status!.Status);
         Assert.Equal("d1", status.Driver!.DriverId);
         Assert.Equal("CAB-4521", status.Driver.VehiclePlate);
+    }
+
+    [Theory]
+    [InlineData("Arrived")]
+    [InlineData("InProgress")]
+    [InlineData("Completed")]
+    public async Task Status_PastAcceptance_ReportsThatStageWithCoordinates(string stage)
+    {
+        _offers.Setup(o => o.GetOffersForTripAsync("trip-1")).ReturnsAsync(new List<DriverOffer>
+        {
+            new()
+            {
+                TripId = "trip-1", DriverId = "d1", Status = stage, CreatedAt = DateTime.UtcNow,
+                PickupLocation = "Colombo Fort", PickupLat = 6.9344, PickupLng = 79.8428,
+                DropoffLocation = "Bambalapitiya", DropoffLat = 6.8905, DropoffLng = 79.8565,
+                Fare = 480m,
+            },
+        });
+        _activeDrivers.Setup(a => a.GetActiveDriversAsync(null)).ReturnsAsync(new List<ActiveDriver>());
+
+        var status = await CreateService().GetStatusAsync("trip-1");
+
+        Assert.Equal(stage, status!.Status);
+        Assert.Equal(6.9344, status.PickupLat);
+        Assert.Equal(79.8428, status.PickupLng);
+        Assert.Equal(6.8905, status.DropoffLat);
+        Assert.Equal(79.8565, status.DropoffLng);
+        Assert.Equal(480m, status.Fare);
     }
 
     [Fact]

@@ -16,12 +16,30 @@ public enum AcceptOutcome
     NotAvailable,
 }
 
+public enum StatusUpdateOutcome
+{
+    Updated,
+
+    /// <summary>This driver has no (won) offer for this trip at all.</summary>
+    NotFound,
+
+    /// <summary>The offer exists but isn't in the right status for this action (e.g. already started, or not yet accepted).</summary>
+    InvalidTransition,
+}
+
 public interface IDriverOfferService
 {
     /// <summary>The driver's pending, not-yet-expired offers, newest first.</summary>
     Task<List<DriverOffer>> GetPendingAsync(string driverId);
 
     Task<(AcceptOutcome Outcome, DriverOffer? Offer)> AcceptAsync(string tripId, string driverId);
+
+    /// <summary>
+    /// Advances the trip through its post-acceptance stages one at a time: Accepted -> Arrived ->
+    /// InProgress -> Completed. Each call must name the very next stage; skipping or going backwards
+    /// is rejected as InvalidTransition.
+    /// </summary>
+    Task<(StatusUpdateOutcome Outcome, DriverOffer? Offer)> UpdateStatusAsync(string tripId, string driverId, string action);
 }
 
 /// <summary>
@@ -71,6 +89,25 @@ public class DriverOfferService : IDriverOfferService
         accepted.ExpiresAt = accepted.CreatedAt.AddSeconds(_options.OfferTtlSeconds);
         await PublishDriverAcceptedAsync(accepted);
         return (AcceptOutcome.Accepted, accepted);
+    }
+
+    private static readonly Dictionary<string, string> RequiredPreviousStatus = new()
+    {
+        ["Arrived"] = "Accepted",
+        ["InProgress"] = "Arrived",
+        ["Completed"] = "InProgress",
+    };
+
+    public async Task<(StatusUpdateOutcome Outcome, DriverOffer? Offer)> UpdateStatusAsync(string tripId, string driverId, string action)
+    {
+        if (!RequiredPreviousStatus.TryGetValue(action, out var fromStatus))
+            return (StatusUpdateOutcome.InvalidTransition, null);
+
+        var updated = await _offers.TryAdvanceStatusAsync(tripId, driverId, fromStatus, action);
+        if (updated is not null) return (StatusUpdateOutcome.Updated, updated);
+
+        var status = await _offers.GetStatusAsync(tripId, driverId);
+        return status is null ? (StatusUpdateOutcome.NotFound, null) : (StatusUpdateOutcome.InvalidTransition, null);
     }
 
     // The accept is already committed by the time we get here, and retrying it would

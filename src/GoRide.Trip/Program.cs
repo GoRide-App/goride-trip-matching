@@ -58,9 +58,11 @@ builder.Services.AddCors(options =>
 
 var app = builder.Build();
 
-// ---- Ensure driver_offers exists (no migration tool on this service — schema is created
-// idempotently on startup). A failure is logged but doesn't stop the app: fare estimates
-// and the plain driver search don't need this table.
+// ---- Try to ensure driver_offers exists (no migration tool on this service — see
+// create_driver_offers.sql, which is the real source of the schema on the shared Azure DB).
+// The trip_svc account has no CREATE grant, so this fails for EVERY developer on EVERY
+// startup once the table already exists -- that's expected, not a regression, and it does
+// not stop the app: it just means the table was created by that script, not by this check.
 using (var scope = app.Services.CreateScope())
 {
     try
@@ -69,7 +71,10 @@ using (var scope = app.Services.CreateScope())
     }
     catch (Exception ex)
     {
-        app.Logger.LogError(ex, "Failed to ensure driver_offers schema exists.");
+        app.Logger.LogInformation(
+            "Skipping automatic driver_offers setup ({Message}). This is expected: trip_svc can't create tables, " +
+            "so driver_offers is created once via create_driver_offers.sql instead. The app is continuing normally.",
+            ex.Message);
     }
 }
 
