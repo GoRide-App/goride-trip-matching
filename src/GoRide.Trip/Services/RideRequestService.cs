@@ -66,20 +66,29 @@ public class RideRequestService : IRideRequestService
         return (search, null);
     }
 
+    private static readonly HashSet<string> WonStatuses = new() { "Accepted", "Arrived", "InProgress", "Completed" };
+
     public async Task<RideRequestStatus?> GetStatusAsync(string tripId)
     {
         var offers = await _offers.GetOffersForTripAsync(tripId);
         if (offers.Count == 0) return null;
 
-        var accepted = offers.FirstOrDefault(o => o.Status == "Accepted");
-        if (accepted is not null)
+        var won = offers.FirstOrDefault(o => WonStatuses.Contains(o.Status));
+        if (won is not null)
         {
             return new RideRequestStatus
             {
                 TripId = tripId,
-                Status = "Accepted",
+                Status = won.Status,
                 // Vehicle details come from identity-auth; if that's down the rider still learns a driver accepted.
-                Driver = await FindDriverAsync(accepted.DriverId) ?? new ActiveDriver { DriverId = accepted.DriverId },
+                Driver = await FindDriverAsync(won.DriverId) ?? new ActiveDriver { DriverId = won.DriverId },
+                PickupLocation = won.PickupLocation,
+                PickupLat = won.PickupLat,
+                PickupLng = won.PickupLng,
+                DropoffLocation = won.DropoffLocation,
+                DropoffLat = won.DropoffLat,
+                DropoffLng = won.DropoffLng,
+                Fare = won.Fare,
             };
         }
 
@@ -107,7 +116,8 @@ public class RideRequestService : IRideRequestService
         // The offer is what a driver's app sees, so it is recorded first. If that fails the whole
         // request fails, because nobody could ever act on it.
         await _offers.CreatePendingAsync(tripId, driver.DriverId, riderId, driver.DistanceKm,
-            request.PickupLocation, request.DropoffLocation, request.Fare);
+            request.PickupLocation, request.PickupLat, request.PickupLng,
+            request.DropoffLocation, request.DropoffLat, request.DropoffLng, request.Fare);
 
         try
         {

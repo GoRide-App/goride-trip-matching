@@ -34,13 +34,39 @@ CREATE TABLE IF NOT EXISTS driver_offers (
     status           VARCHAR(16)   NOT NULL DEFAULT 'Pending',
     distance_km      DOUBLE        NOT NULL,
     pickup_location  VARCHAR(255)  NULL,
+    pickup_lat       DOUBLE        NULL,
+    pickup_lng       DOUBLE        NULL,
     dropoff_location VARCHAR(255)  NULL,
+    dropoff_lat      DOUBLE        NULL,
+    dropoff_lng      DOUBLE        NULL,
     fare             DECIMAL(10,2) NULL,
     created_at       DATETIME(3)   NOT NULL,
     decided_at       DATETIME(3)   NULL,
+    arrived_at       DATETIME(3)   NULL,
+    started_at       DATETIME(3)   NULL,
+    completed_at     DATETIME(3)   NULL,
     PRIMARY KEY (trip_id, driver_id),
     INDEX idx_driver_offers_driver_status (driver_id, status)
 );
+
+-- ---------------------------------------------------------------------------
+-- 2b. SCRUM-82: if you already had driver_offers from before this column set
+--    (pickup/dropoff coordinates + the arrived/started/completed timestamps),
+--    the CREATE above was a no-op, so add them by hand instead. Run this block
+--    ONCE -- unlike the CREATE above, plain ADD COLUMN errors ("Duplicate
+--    column name") if a column already exists, because this Azure MySQL
+--    version predates 8.0.29's ADD COLUMN IF NOT EXISTS support. If it fails
+--    partway through, check `DESCRIBE driver_offers` and delete the lines for
+--    whichever columns already landed, then re-run the rest.
+-- ---------------------------------------------------------------------------
+ALTER TABLE driver_offers
+    ADD COLUMN pickup_lat   DOUBLE      NULL AFTER pickup_location,
+    ADD COLUMN pickup_lng   DOUBLE      NULL AFTER pickup_lat,
+    ADD COLUMN dropoff_lat  DOUBLE      NULL AFTER dropoff_location,
+    ADD COLUMN dropoff_lng  DOUBLE      NULL AFTER dropoff_lat,
+    ADD COLUMN arrived_at   DATETIME(3) NULL AFTER decided_at,
+    ADD COLUMN started_at   DATETIME(3) NULL AFTER arrived_at,
+    ADD COLUMN completed_at DATETIME(3) NULL AFTER started_at;
 
 -- ---------------------------------------------------------------------------
 -- 3. Only if trip_svc has rights per table rather than on all of trip_db:
