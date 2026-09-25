@@ -1,4 +1,5 @@
 using GoRide.Trip.Models;
+using MySqlConnector;
 
 namespace GoRide.Trip.Data;
 
@@ -24,9 +25,11 @@ public interface IDriverOfferRepository
     Task<List<DriverOffer>> GetPendingForDriverAsync(string driverId, int ttlSeconds);
 
     /// <summary>
-    /// Atomically flips this driver's offer from Pending to Accepted — but only if it is
-    /// still Pending and younger than ttlSeconds. Returns the offer when it was accepted,
-    /// or null when it wasn't (missing, already decided, or expired).
+    /// Accepts this driver's offer -- but only if it is still Pending and younger than
+    /// ttlSeconds, AND no other driver has already accepted the same trip (SCRUM-62: if two
+    /// drivers accept at the same instant, exactly one wins, never both). Returns the offer
+    /// when it was accepted, or null when it wasn't (missing, already decided, expired, or
+    /// beaten to it by another driver).
     /// </summary>
     Task<DriverOffer?> TryAcceptAsync(string tripId, string driverId, int ttlSeconds);
 
@@ -82,6 +85,16 @@ public class DriverOfferRepository : IDriverOfferRepository
                 completed_at     DATETIME(3)   NULL,
                 PRIMARY KEY (trip_id, driver_id),
                 INDEX idx_driver_offers_driver_status (driver_id, status)
+            )");
+
+        // SCRUM-62: trip_id is the PRIMARY KEY here, so InnoDB itself enforces that only one
+        // driver can ever successfully INSERT a claim row for a given trip -- see TryAcceptAsync.
+        await ExecuteAsync(@"
+            CREATE TABLE IF NOT EXISTS trip_claims (
+                trip_id    VARCHAR(64) NOT NULL,
+                driver_id  VARCHAR(64) NOT NULL,
+                claimed_at DATETIME(3) NOT NULL,
+                PRIMARY KEY (trip_id)
             )");
     }
 
@@ -144,8 +157,29 @@ public class DriverOfferRepository : IDriverOfferRepository
 
     public async Task<DriverOffer?> TryAcceptAsync(string tripId, string driverId, int ttlSeconds)
     {
-        // One conditional UPDATE: the WHERE clause is the whole validation, and MySQL
-        // applies a single statement atomically, so two accepts of the same offer can't both win.
+        // SCRUM-62: only the first valid acceptance succeeds, even when several drivers accept
+        // at the same instant. A conditional UPDATE on driver_offers alone isn't enough for
+        // that -- it only stops the SAME driver double-accepting their OWN row, since each
+        // driver offered the trip has a separate (trip_id, driver_id) row. What actually
+        // decides the race is trying to INSERT a claim row keyed by trip_id ALONE: trip_id is
+        // its PRIMARY KEY, so InnoDB guarantees at most one such INSERT can ever succeed for a
+        // given trip, no matter how many drivers race for it concurrently. Whoever wins that
+        // insert is the only one who proceeds to flip their own offer to Accepted.
+        try
+        {
+            await ExecuteAsync(
+                "INSERT INTO trip_claims (trip_id, driver_id, claimed_at) VALUES (@tripId, @driverId, UTC_TIMESTAMP(3))",
+                ("@tripId", tripId), ("@driverId", driverId));
+        }
+        catch (MySqlException ex) when (ex.ErrorCode == MySqlErrorCode.DuplicateKeyEntry)
+        {
+            // Someone else already claimed this trip -- this driver loses the race outright,
+            // regardless of whether their own offer would otherwise still be valid.
+            return null;
+        }
+
+        // Won the claim. Still validate this driver's own offer is a real, unexpired Pending
+        // one -- winning the race doesn't matter if their offer itself had already lapsed.
         var updated = await ExecuteAsync(@"
             UPDATE driver_offers
             SET status = 'Accepted', decided_at = UTC_TIMESTAMP(3)
@@ -154,7 +188,17 @@ public class DriverOfferRepository : IDriverOfferRepository
               AND created_at >= (UTC_TIMESTAMP(3) - INTERVAL @ttl SECOND)",
             ("@tripId", tripId), ("@driverId", driverId), ("@ttl", ttlSeconds));
 
-        if (updated == 0) return null;
+        if (updated == 0)
+        {
+            // The claim was pointless (this driver's own offer wasn't valid after all) --
+            // release it so a still-valid offer (this driver's on a retry, were that possible,
+            // or -- more importantly -- a future request that reuses this trip_id, e.g. a
+            // rider's retry after NO_DRIVER_FOUND) is never permanently blocked by a claim
+            // that nobody ever finished.
+            await ExecuteAsync("DELETE FROM trip_claims WHERE trip_id = @tripId AND driver_id = @driverId",
+                ("@tripId", tripId), ("@driverId", driverId));
+            return null;
+        }
 
         var rows = await QueryAsync(
             $"SELECT {OfferColumns} FROM driver_offers WHERE trip_id = @tripId AND driver_id = @driverId",
