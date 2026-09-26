@@ -182,17 +182,26 @@ public class DriverOfferServiceTests
         Assert.Equal(action, offer!.Status);
     }
 
-    [Fact]
-    public async Task UpdateStatus_SkippingAStage_IsRejectedAsInvalidTransition()
+    [Theory]
+    [InlineData("Pending")]
+    [InlineData("Accepted")]
+    [InlineData("Declined")]
+    [InlineData("Expired")]
+    [InlineData("Failed")]
+    [InlineData("Cancelled")]
+    [InlineData("InProgress")]
+    [InlineData("Completed")]
+    public async Task UpdateStatus_InvalidStart_IsRejectedWithoutNotifying(string currentStatus)
     {
         // Trying to jump straight to InProgress from Accepted (skipping Arrived).
         _offers.Setup(o => o.TryAdvanceStatusAsync("trip-1", "d1", "Arrived", "InProgress")).ReturnsAsync((DriverOffer?)null);
-        _offers.Setup(o => o.GetStatusAsync("trip-1", "d1")).ReturnsAsync("Accepted");
+        _offers.Setup(o => o.GetStatusAsync("trip-1", "d1")).ReturnsAsync(currentStatus);
 
         var (outcome, offer) = await CreateService().UpdateStatusAsync("trip-1", "d1", "InProgress");
 
         Assert.Equal(StatusUpdateOutcome.InvalidTransition, outcome);
         Assert.Null(offer);
+        _publisher.Verify(p => p.PublishAsync(It.IsAny<TripEvent>()), Times.Never);
     }
 
     [Fact]
@@ -206,13 +215,47 @@ public class DriverOfferServiceTests
         Assert.Equal(StatusUpdateOutcome.NotFound, outcome);
     }
 
-    [Fact]
-    public async Task UpdateStatus_UnknownAction_IsRejectedWithoutTouchingTheRepository()
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("Cancelled")]
+    [InlineData("inprogress")]
+    public async Task UpdateStatus_UnknownAction_IsRejectedWithoutTouchingTheRepository(string? action)
     {
-        var (outcome, offer) = await CreateService().UpdateStatusAsync("trip-1", "d1", "Cancelled");
+        var (outcome, offer) = await CreateService().UpdateStatusAsync("trip-1", "d1", action!);
 
         Assert.Equal(StatusUpdateOutcome.InvalidTransition, outcome);
         Assert.Null(offer);
         _offers.Verify(o => o.TryAdvanceStatusAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()), Times.Never);
+    }
+
+    [Theory]
+    [InlineData(null, "d1")]
+    [InlineData("", "d1")]
+    [InlineData(" ", "d1")]
+    [InlineData("trip-1", null)]
+    [InlineData("trip-1", "")]
+    [InlineData("trip-1", " ")]
+    public async Task UpdateStatus_MissingId_IsRejectedBeforeAccessingTheStore(string? tripId, string? driverId)
+    {
+        var (outcome, offer) = await CreateService().UpdateStatusAsync(tripId!, driverId!, "InProgress");
+
+        Assert.Equal(StatusUpdateOutcome.InvalidRequest, outcome);
+        Assert.Null(offer);
+        _offers.VerifyNoOtherCalls();
+        _publisher.VerifyNoOtherCalls();
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task UpdateStatus_OverlongId_IsRejectedBeforeAccessingTheStore(bool longTripId)
+    {
+        var longId = new string('x', 65);
+        var (outcome, _) = await CreateService().UpdateStatusAsync(
+            longTripId ? longId : "trip-1", longTripId ? "d1" : longId, "InProgress");
+
+        Assert.Equal(StatusUpdateOutcome.InvalidRequest, outcome);
+        _offers.VerifyNoOtherCalls();
     }
 }

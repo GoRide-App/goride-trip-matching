@@ -20,6 +20,9 @@ public enum StatusUpdateOutcome
 {
     Updated,
 
+    /// <summary>A trip or driver identifier is missing or exceeds the database limit.</summary>
+    InvalidRequest,
+
     /// <summary>This driver has no (won) offer for this trip at all.</summary>
     NotFound,
 
@@ -91,16 +94,13 @@ public class DriverOfferService : IDriverOfferService
         return (AcceptOutcome.Accepted, accepted);
     }
 
-    private static readonly Dictionary<string, string> RequiredPreviousStatus = new()
-    {
-        ["Arrived"] = "Accepted",
-        ["InProgress"] = "Arrived",
-        ["Completed"] = "InProgress",
-    };
-
     public async Task<(StatusUpdateOutcome Outcome, DriverOffer? Offer)> UpdateStatusAsync(string tripId, string driverId, string action)
     {
-        if (!RequiredPreviousStatus.TryGetValue(action, out var fromStatus))
+        if (!TripStatusFlow.IsValidId(tripId) || !TripStatusFlow.IsValidId(driverId))
+            return (StatusUpdateOutcome.InvalidRequest, null);
+
+        var fromStatus = TripStatusFlow.PreviousStatus(action);
+        if (fromStatus is null)
             return (StatusUpdateOutcome.InvalidTransition, null);
 
         var updated = await _offers.TryAdvanceStatusAsync(tripId, driverId, fromStatus, action);

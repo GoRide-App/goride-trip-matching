@@ -7,7 +7,7 @@ public class DriverOffer
     public string DriverId { get; set; } = string.Empty;
     public string RiderId { get; set; } = string.Empty;
 
-    /// <summary>Pending, Accepted, Declined or Expired.</summary>
+    /// <summary>Pending, Accepted, Arrived, InProgress, Completed, Declined, Expired or Failed.</summary>
     public string Status { get; set; } = string.Empty;
 
     /// <summary>Straight-line distance from the driver to the pickup, in km, when the offer was made.</summary>
