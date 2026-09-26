@@ -42,7 +42,9 @@ public interface IDriverOfferRepository
     /// <summary>
     /// Atomically advances the accepted offer from fromStatus to toStatus and stamps the matching
     /// timestamp column (arrived_at / started_at / completed_at) -- only if it is still exactly
-    /// fromStatus, so two concurrent requests (or a stale retry) can't both apply. Returns the
+    /// fromStatus, the driver owns the trip claim, and the lifecycle timestamps allow it.
+    /// Only adjacent forward steps are supported. Two concurrent requests (or a stale retry)
+    /// can't both apply. The update and returned snapshot share a transaction. Returns the
     /// updated offer, or null when the transition wasn't valid (wrong driver, wrong current status,
     /// or no such offer at all).
     /// </summary>
@@ -223,8 +225,13 @@ public class DriverOfferRepository : IDriverOfferRepository
 
     public async Task<DriverOffer?> TryAdvanceStatusAsync(string tripId, string driverId, string fromStatus, string toStatus)
     {
-        // toStatus only ever comes from DriverOfferService's own fixed action->status map (never
-        // straight from the HTTP request), so it's safe to pick the timestamp column from it here.
+        // Enforce the state machine here too: no caller can request Completed -> InProgress.
+        if (!TripStatusFlow.IsValidId(tripId) || !TripStatusFlow.IsValidId(driverId)
+            || TripStatusFlow.PreviousStatus(toStatus) is not { } requiredStatus
+            || fromStatus != requiredStatus)
+            return null;
+
+        // These fragments are fixed application values. All request values remain parameters.
         var timestampColumn = toStatus switch
         {
             "Arrived" => "arrived_at",
@@ -233,20 +240,48 @@ public class DriverOfferRepository : IDriverOfferRepository
             _ => throw new ArgumentOutOfRangeException(nameof(toStatus), toStatus, "Unknown trip status."),
         };
 
-        // Same pattern as TryAcceptAsync: the WHERE clause (still fromStatus, right driver) is the
-        // whole validation, applied atomically in one UPDATE.
-        var updated = await ExecuteAsync($@"
+        var timestampGuard = toStatus switch
+        {
+            "Arrived" => "arrived_at IS NULL AND started_at IS NULL",
+            "InProgress" => "arrived_at IS NOT NULL AND started_at IS NULL",
+            "Completed" => "arrived_at IS NOT NULL AND started_at IS NOT NULL",
+            _ => throw new ArgumentOutOfRangeException(nameof(toStatus)),
+        };
+
+        await using var conn = _dbFactory.CreateConnection();
+        await conn.OpenAsync();
+        await using var transaction = await conn.BeginTransactionAsync();
+
+        // Keep the row locked until its snapshot has been read so the response cannot describe
+        // a later transition made by another request. Completed timestamps are never reusable.
+        await using var cmd = conn.CreateCommand();
+        cmd.Transaction = transaction;
+        cmd.CommandText = $@"
             UPDATE driver_offers
             SET status = @toStatus, {timestampColumn} = UTC_TIMESTAMP(3)
-            WHERE trip_id = @tripId AND driver_id = @driverId AND status = @fromStatus",
-            ("@tripId", tripId), ("@driverId", driverId), ("@fromStatus", fromStatus), ("@toStatus", toStatus));
+            WHERE trip_id = @tripId AND driver_id = @driverId AND status = @fromStatus
+              AND completed_at IS NULL AND {timestampGuard}
+              AND EXISTS (
+                  SELECT 1 FROM trip_claims
+                  WHERE trip_claims.trip_id = driver_offers.trip_id
+                    AND trip_claims.driver_id = driver_offers.driver_id
+              )";
+        cmd.Parameters.AddWithValue("@tripId", tripId);
+        cmd.Parameters.AddWithValue("@driverId", driverId);
+        cmd.Parameters.AddWithValue("@fromStatus", fromStatus);
+        cmd.Parameters.AddWithValue("@toStatus", toStatus);
+        var updated = await cmd.ExecuteNonQueryAsync();
 
         if (updated == 0) return null;
 
+        // A failed read rolls back the update; a successful response always reflects a committed step.
         var rows = await QueryAsync(
+            conn, transaction,
             $"SELECT {OfferColumns} FROM driver_offers WHERE trip_id = @tripId AND driver_id = @driverId",
             ("@tripId", tripId), ("@driverId", driverId));
-        return rows.SingleOrDefault();
+        var offer = rows.Single();
+        await transaction.CommitAsync();
+        return offer;
     }
 
     private async Task<int> ExecuteAsync(string sql, params (string Name, object Value)[] parameters)
@@ -266,7 +301,15 @@ public class DriverOfferRepository : IDriverOfferRepository
         await using var conn = _dbFactory.CreateConnection();
         await conn.OpenAsync();
 
+        return await QueryAsync(conn, null, sql, parameters);
+    }
+
+    private static async Task<List<DriverOffer>> QueryAsync(
+        MySqlConnection conn, MySqlTransaction? transaction, string sql,
+        params (string Name, object Value)[] parameters)
+    {
         await using var cmd = conn.CreateCommand();
+        cmd.Transaction = transaction;
         cmd.CommandText = sql;
         foreach (var (name, value) in parameters)
             cmd.Parameters.AddWithValue(name, value);
