@@ -1,3 +1,5 @@
+using System.ComponentModel.DataAnnotations;
+using System.Data.Common;
 using GoRide.Trip.Models;
 using GoRide.Trip.Services;
 using Microsoft.AspNetCore.Mvc;
@@ -78,7 +80,7 @@ public class DriverOffersController : ControllerBase
 
     /// <summary>
     /// The driver advances their accepted trip one stage: Arrived, then InProgress, then Completed.
-    /// 200 with the updated offer; 404 if this driver has no (won) offer for the trip; 409 if the
+    /// 200 with the updated offer; 404 if this driver has no offer for the trip; 409 if the
     /// requested stage isn't the one immediately after its current status.
     /// </summary>
     [HttpPost("{tripId}/status")]
@@ -87,28 +89,41 @@ public class DriverOffersController : ControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     [ProducesResponseType(StatusCodes.Status409Conflict)]
     [ProducesResponseType(StatusCodes.Status503ServiceUnavailable)]
-    public async Task<IActionResult> UpdateStatus(string tripId, [FromBody] UpdateTripStatusRequest request)
+    public async Task<IActionResult> UpdateStatus(
+        [FromRoute, Required, StringLength(64)] string tripId,
+        [FromBody] UpdateTripStatusRequest request)
     {
-        if (string.IsNullOrWhiteSpace(request.DriverId))
-            return BadRequest(new { error = "driverId is required." });
-        if (request.Action is not ("Arrived" or "InProgress" or "Completed"))
-            return BadRequest(new { error = "action must be one of: Arrived, InProgress, Completed." });
-
         try
         {
             var (outcome, offer) = await _offerService.UpdateStatusAsync(tripId, request.DriverId, request.Action);
             return outcome switch
             {
                 StatusUpdateOutcome.Updated => Ok(offer),
-                StatusUpdateOutcome.NotFound => NotFound(new { error = "This driver has no accepted trip with that id." }),
-                _ => Conflict(new { error = "This trip isn't ready for that step yet." }),
+                StatusUpdateOutcome.InvalidRequest => StatusError(StatusCodes.Status400BadRequest,
+                    "INVALID_REQUEST", "tripId and driverId are required and must not exceed 64 characters."),
+                StatusUpdateOutcome.NotFound => StatusError(StatusCodes.Status404NotFound,
+                    "TRIP_NOT_FOUND", "This driver has no offer for that trip."),
+                _ => StatusError(StatusCodes.Status409Conflict, "INVALID_TRIP_TRANSITION",
+                    request.Action == "InProgress"
+                        ? "This ride cannot be started. It must have arrived and must not already be started or completed."
+                        : "This trip cannot advance to that status."),
             };
         }
-        catch (MySqlException ex)
+        catch (Exception ex) when (ex is DbException or TimeoutException)
         {
             _logger.LogError(ex, "Could not update status for trip {TripId}, driver {DriverId}.", tripId, request.DriverId);
-            return Unavailable();
+            return StatusError(StatusCodes.Status503ServiceUnavailable,
+                "OFFERS_STORE_UNAVAILABLE", "Could not reach the offers store right now. Please try again.");
         }
+    }
+
+    private ObjectResult StatusError(int status, string code, string error)
+    {
+        var problem = new ProblemDetails { Status = status, Title = error };
+        problem.Extensions["code"] = code;
+        // Keep the existing error property for clients that already display it.
+        problem.Extensions["error"] = error;
+        return StatusCode(status, problem);
     }
 
     private ObjectResult Unavailable() =>
