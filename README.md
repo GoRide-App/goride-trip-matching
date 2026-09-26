@@ -2,6 +2,9 @@
 
 This is the **Codebase Structure** for GoRide-trip_matching backend microservice.
 
+SCRUM-83 ride-start rules, API errors, and test instructions are documented in
+[docs/SCRUM-83.md](docs/SCRUM-83.md).
+
 ## Folder structure
 
 ```
