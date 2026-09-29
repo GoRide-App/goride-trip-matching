@@ -1,0 +1,8 @@
+global:
+  scrape_interval: 5s        # how often to pull metrics (15s is typical in production)
+
+scrape_configs:
+  - job_name: dotnet-app
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['app:8080']   # service name from docker-compose + container port
