@@ -72,6 +72,11 @@ public class LocationClient : ILocationClient
                       $"&lng={lng.ToString(CultureInfo.InvariantCulture)}" +
                       $"&radiusKm={radiusKm.ToString(CultureInfo.InvariantCulture)}";
 
+
+
+            //Added line for CI/CD Testing 
+
+
             var response = await _httpClient.GetAsync(url);
             if (!response.IsSuccessStatusCode)
             {
