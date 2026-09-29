@@ -44,7 +44,7 @@ services:
     ports:
       - "9090:9090"
     depends_on:
-      - app
+      - service-api
   
   grafana:
     image: grafana/grafana:latest
