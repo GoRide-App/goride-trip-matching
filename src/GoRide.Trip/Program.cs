@@ -86,8 +86,8 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI();
 }
 
-app.UseCors("FrontendPolicy");
 app.UseRouting();
+app.UseCors("FrontendPolicy");
 app.UseHttpMetrics();
 app.UseAuthorization();
 app.MapControllers();
