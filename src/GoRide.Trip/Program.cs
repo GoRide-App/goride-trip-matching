@@ -39,8 +39,12 @@ builder.Services.AddHttpClient<ILocationClient, LocationClient>(client =>
 });
 
 // ---- Kafka producer service (singleton) ----
-builder.Services.AddSingleton<KafkaProducerService>();  // One shared Kafka connection for the whole app's lifetime, not a new one per request.
-builder.Services.AddSingleton<ITripEventPublisher, TripEventPublisher>();  // Publishes trip events to the topic goride-notification consumes.
+builder.Services.AddSingleton<IKafkaProducerService, KafkaProducerService>();  // One shared Kafka connection for the whole app's lifetime, not a new one per request.
+// Request handlers only queue trip events (TripEventPublisher); TripEventSender sends them to the
+// topic goride-notification consumes, in the background, so no request ever waits on the broker.
+builder.Services.AddSingleton<TripEventPublisher>();
+builder.Services.AddSingleton<ITripEventPublisher>(sp => sp.GetRequiredService<TripEventPublisher>());
+builder.Services.AddHostedService<TripEventSender>();
 
 // ---- CORS: allow the Next.js frontend (local dev + Vercel-hosted) to call this API ----
 var allowedOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>()
