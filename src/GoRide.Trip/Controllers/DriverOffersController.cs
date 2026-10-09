@@ -44,9 +44,37 @@ public class DriverOffersController : ControllerBase
     }
 
     /// <summary>
+    /// The driver's current trip, so their app can pick it back up after a reload. 200 with the
+    /// same shape accept returns, for a trip that is Accepted, Arrived or InProgress -- or one
+    /// Completed in the last 6 hours (the app checks whether it has been paid); 204 when there's none.
+    /// </summary>
+    [HttpGet("active")]
+    [ProducesResponseType(typeof(DriverOffer), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status503ServiceUnavailable)]
+    public async Task<IActionResult> GetActive([FromQuery] string? driverId)
+    {
+        if (string.IsNullOrWhiteSpace(driverId))
+            return BadRequest(new { error = "driverId is required." });
+
+        try
+        {
+            var trip = await _offerService.GetCurrentTripAsync(driverId);
+            return trip is null ? NoContent() : Ok(trip);
+        }
+        catch (MySqlException ex)
+        {
+            _logger.LogError(ex, "Could not load the current trip for driver {DriverId}.", driverId);
+            return Unavailable();
+        }
+    }
+
+    /// <summary>
     /// The driver accepts a ride request. 200 with the accepted offer; 404 if this
     /// driver was never offered the trip; 409 if the offer is no longer available
-    /// (expired, or already decided).
+    /// (expired, or already decided), or -- with code DRIVER_BUSY -- if the driver
+    /// is already on another trip.
     /// </summary>
     [HttpPost("{tripId}/accept")]
     [ProducesResponseType(typeof(DriverOffer), StatusCodes.Status200OK)]
@@ -66,6 +94,11 @@ public class DriverOffersController : ControllerBase
             {
                 AcceptOutcome.Accepted => Ok(offer),
                 AcceptOutcome.NotFound => NotFound(new { error = "This driver has no offer for that trip." }),
+                AcceptOutcome.DriverBusy => Conflict(new
+                {
+                    error = "You already have an active trip. Finish it before accepting another ride.",
+                    code = "DRIVER_BUSY",
+                }),
                 _ => Conflict(new { error = "This ride request is no longer available." }),
             };
         }

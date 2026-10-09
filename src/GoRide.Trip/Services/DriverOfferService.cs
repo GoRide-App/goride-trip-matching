@@ -14,6 +14,9 @@ public enum AcceptOutcome
 
     /// <summary>The offer exists but can no longer be accepted (expired, already decided, or failed).</summary>
     NotAvailable,
+
+    /// <summary>This driver is already on another trip (Accepted, Arrived or InProgress).</summary>
+    DriverBusy,
 }
 
 public enum StatusUpdateOutcome
@@ -40,6 +43,13 @@ public interface IDriverOfferService
     /// is rejected as InvalidTransition.
     /// </summary>
     Task<(StatusUpdateOutcome Outcome, DriverOffer? Offer)> UpdateStatusAsync(string tripId, string driverId, string action);
+
+    /// <summary>
+    /// The trip the driver's app should pick back up after a reload: one still underway (Accepted, Arrived
+    /// or InProgress), or else one Completed within the last few hours (the app checks its payment itself).
+    /// Null when there is none.
+    /// </summary>
+    Task<DriverOffer?> GetCurrentTripAsync(string driverId);
 }
 
 /// <summary>
@@ -78,6 +88,12 @@ public class DriverOfferService : IDriverOfferService
 
     public async Task<(AcceptOutcome Outcome, DriverOffer? Offer)> AcceptAsync(string tripId, string driverId)
     {
+        // A driver works one trip at a time. Checked before the claim so a busy driver never takes a trip
+        // away from the other drivers it was offered to. (This trip itself is excluded, so retrying an
+        // accept that already went through still gets the usual "no longer available" answer.)
+        if (await _offers.HasActiveTripAsync(driverId, exceptTripId: tripId))
+            return (AcceptOutcome.DriverBusy, null);
+
         var accepted = await _offers.TryAcceptAsync(tripId, driverId, _options.OfferTtlSeconds);
         if (accepted is null)
         {
@@ -108,6 +124,17 @@ public class DriverOfferService : IDriverOfferService
 
         var status = await _offers.GetStatusAsync(tripId, driverId);
         return status is null ? (StatusUpdateOutcome.NotFound, null) : (StatusUpdateOutcome.InvalidTransition, null);
+    }
+
+    // Long enough to cover the app being closed between dropping the rider off and settling payment.
+    private const int RecentlyCompletedHours = 6;
+
+    public async Task<DriverOffer?> GetCurrentTripAsync(string driverId)
+    {
+        var trip = await _offers.GetCurrentTripForDriverAsync(driverId, RecentlyCompletedHours);
+        if (trip is not null)
+            trip.ExpiresAt = trip.CreatedAt.AddSeconds(_options.OfferTtlSeconds);   // same shape accept returns
+        return trip;
     }
 
     // The accept is already committed by the time we get here, and retrying it would

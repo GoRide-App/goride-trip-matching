@@ -167,6 +167,55 @@ public class DriverOfferServiceTests
         Assert.Null(published!.Payload.VehiclePlate);   // just left blank
     }
 
+    [Fact]
+    public async Task Accept_DriverAlreadyOnAnotherTrip_IsDriverBusy_AndTheTripIsNotClaimed()
+    {
+        _offers.Setup(o => o.HasActiveTripAsync("d1", "trip-2")).ReturnsAsync(true);
+
+        var (outcome, offer) = await CreateService().AcceptAsync("trip-2", "d1");
+
+        Assert.Equal(AcceptOutcome.DriverBusy, outcome);
+        Assert.Null(offer);
+        // Never claimed, so the other drivers it was offered to can still take it.
+        _offers.Verify(o => o.TryAcceptAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<int>()), Times.Never);
+        _publisher.Verify(p => p.PublishAsync(It.IsAny<TripEvent>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task Accept_TheBusyCheckIgnoresTheTripBeingAccepted()
+    {
+        // Otherwise a retried accept of the driver's own trip would be reported as "busy".
+        _offers.Setup(o => o.TryAcceptAsync("trip-1", "d1", Ttl)).ReturnsAsync(AcceptedOffer());
+
+        var (outcome, _) = await CreateService().AcceptAsync("trip-1", "d1");
+
+        Assert.Equal(AcceptOutcome.Accepted, outcome);
+        _offers.Verify(o => o.HasActiveTripAsync("d1", "trip-1"), Times.Once);
+    }
+
+    // ---- GetCurrentTripAsync (driver app restoring its trip) ----
+
+    [Fact]
+    public async Task CurrentTrip_ReturnsTheTrip_InTheSameShapeAcceptReturns()
+    {
+        var trip = AcceptedOffer();
+        trip.Status = "InProgress";
+        _offers.Setup(o => o.GetCurrentTripForDriverAsync("d1", 6)).ReturnsAsync(trip);
+
+        var current = await CreateService().GetCurrentTripAsync("d1");
+
+        Assert.Equal("InProgress", current!.Status);
+        Assert.Equal(trip.CreatedAt.AddSeconds(Ttl), current.ExpiresAt);
+    }
+
+    [Fact]
+    public async Task CurrentTrip_None_ReturnsNull()
+    {
+        _offers.Setup(o => o.GetCurrentTripForDriverAsync("d1", It.IsAny<int>())).ReturnsAsync((DriverOffer?)null);
+
+        Assert.Null(await CreateService().GetCurrentTripAsync("d1"));
+    }
+
     // ---- UpdateStatusAsync (SCRUM-82) ----
 
     [Theory]

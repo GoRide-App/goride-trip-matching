@@ -47,6 +47,15 @@ public interface IDriverOfferRepository
     /// or no such offer at all).
     /// </summary>
     Task<DriverOffer?> TryAdvanceStatusAsync(string tripId, string driverId, string fromStatus, string toStatus);
+
+    /// <summary>True when the driver is already on a trip (Accepted, Arrived or InProgress) other than exceptTripId.</summary>
+    Task<bool> HasActiveTripAsync(string driverId, string exceptTripId);
+
+    /// <summary>
+    /// The driver's current trip: one still underway (Accepted, Arrived or InProgress), or else the newest
+    /// one Completed within the last completedWithinHours. Null when there is neither.
+    /// </summary>
+    Task<DriverOffer?> GetCurrentTripForDriverAsync(string driverId, int completedWithinHours);
 }
 
 public class DriverOfferRepository : IDriverOfferRepository
@@ -102,6 +111,9 @@ public class DriverOfferRepository : IDriverOfferRepository
     // as opposed to Pending/Declined/Expired -- a trip already at any of those stages must never
     // be re-offered or re-searched.
     private const string WonStatuses = "('Accepted', 'Arrived', 'InProgress', 'Completed')";
+
+    // The won statuses of a trip that is still underway -- the driver is busy with it.
+    private const string ActiveStatuses = "('Accepted', 'Arrived', 'InProgress')";
 
     public async Task<bool> HasAcceptedOfferAsync(string tripId)
     {
@@ -246,6 +258,36 @@ public class DriverOfferRepository : IDriverOfferRepository
         var rows = await QueryAsync(
             $"SELECT {OfferColumns} FROM driver_offers WHERE trip_id = @tripId AND driver_id = @driverId",
             ("@tripId", tripId), ("@driverId", driverId));
+        return rows.SingleOrDefault();
+    }
+
+    public async Task<bool> HasActiveTripAsync(string driverId, string exceptTripId)
+    {
+        await using var conn = _dbFactory.CreateConnection();
+        await conn.OpenAsync();
+
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = $@"
+            SELECT 1 FROM driver_offers
+            WHERE driver_id = @driverId AND status IN {ActiveStatuses} AND trip_id <> @tripId
+            LIMIT 1";
+        cmd.Parameters.AddWithValue("@driverId", driverId);
+        cmd.Parameters.AddWithValue("@tripId", exceptTripId);
+        return await cmd.ExecuteScalarAsync() is not null;
+    }
+
+    public async Task<DriverOffer?> GetCurrentTripForDriverAsync(string driverId, int completedWithinHours)
+    {
+        // A trip still underway always wins over a recently completed one (there should only ever be one
+        // underway -- see DriverOfferService.AcceptAsync); within each group, the newest first.
+        var rows = await QueryAsync($@"
+            SELECT {OfferColumns} FROM driver_offers
+            WHERE driver_id = @driverId
+              AND (status IN {ActiveStatuses}
+                   OR (status = 'Completed' AND completed_at >= (UTC_TIMESTAMP(3) - INTERVAL @hours HOUR)))
+            ORDER BY status = 'Completed', created_at DESC
+            LIMIT 1",
+            ("@driverId", driverId), ("@hours", completedWithinHours));
         return rows.SingleOrDefault();
     }
 
