@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Moq;
@@ -17,8 +18,10 @@ public class DriverOfferServiceTests
     private readonly Mock<ITripEventPublisher> _publisher = new();
     private readonly Mock<IActiveDriversService> _activeDrivers = new();
 
+    // A real (fresh, empty) cache in front of the mocked identity-auth call, as in production.
     private DriverOfferService CreateService() =>
-        new(_offers.Object, _publisher.Object, _activeDrivers.Object,
+        new(_offers.Object, _publisher.Object,
+            new DriverProfileLookup(_activeDrivers.Object, new MemoryCache(new MemoryCacheOptions()), NullLogger<DriverProfileLookup>.Instance),
             Options.Create(new MatchingOptions { OfferTtlSeconds = Ttl }),
             NullLogger<DriverOfferService>.Instance);
 

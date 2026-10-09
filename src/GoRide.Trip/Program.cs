@@ -16,6 +16,8 @@ builder.Services.AddScoped<IDriverMatchingService, DriverMatchingService>();
 builder.Services.AddScoped<IDriverOfferRepository, DriverOfferRepository>();
 builder.Services.AddScoped<IRideRequestService, RideRequestService>();
 builder.Services.AddScoped<IDriverOfferService, DriverOfferService>();
+builder.Services.AddScoped<IDriverProfileLookup, DriverProfileLookup>();
+builder.Services.AddMemoryCache();  // Driver vehicle details, so accepts and rider polls don't refetch every driver from identity-auth.
 builder.Services.Configure<MatchingOptions>(builder.Configuration.GetSection(MatchingOptions.SectionName));
 
 // ---- Database (ADO.NET connection factory — see Data/MySqlConnectionFactory.cs) ----
@@ -27,6 +29,8 @@ builder.Services.AddHttpClient<IActiveDriversService, ActiveDriversService>(clie
     var identityAuthUrl = builder.Configuration["IdentityAuth:BaseUrl"]
         ?? throw new InvalidOperationException("Missing configuration: IdentityAuth:BaseUrl");
     client.BaseAddress = new Uri(identityAuthUrl);
+    // The default is 100s; a hung identity-auth shouldn't hold a ride request that long.
+    client.Timeout = TimeSpan.FromSeconds(5);
 });
 
 // ---- goride-location client (real road-network distance/duration — see Services/LocationClient.cs) ----

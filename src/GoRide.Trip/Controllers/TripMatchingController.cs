@@ -40,7 +40,7 @@ public class TripMatchingController : ControllerBase
         {
             return Ok(await _matchingService.FindNearbyDriversAsync(request));
         }
-        catch (Exception ex) when (ex is HttpRequestException or InvalidOperationException)
+        catch (Exception ex) when (IsDependencyFailure(ex))
         {
             return DependencyUnavailable(ex, request.TripId);
         }
@@ -79,7 +79,7 @@ public class TripMatchingController : ControllerBase
             return StatusCode(StatusCodes.Status503ServiceUnavailable,
                 new { error = "Could not deliver the ride request right now. Please try again." });
         }
-        catch (Exception ex) when (ex is HttpRequestException or InvalidOperationException)
+        catch (Exception ex) when (IsDependencyFailure(ex))
         {
             return DependencyUnavailable(ex, request.TripId);
         }
@@ -108,9 +108,13 @@ public class TripMatchingController : ControllerBase
         }
     }
 
-    // identity-auth or goride-location said no, couldn't be reached, or this service itself is missing
-    // required config (e.g. InternalServices:ApiKey) to call them. All of that is an infrastructure
-    // problem, not "no drivers nearby", so say so instead of returning a bare, unexplained 500.
+    // identity-auth or goride-location said no, couldn't be reached, didn't answer in time (HttpClient
+    // reports its timeout as a TaskCanceledException), or this service itself is missing required config
+    // (e.g. InternalServices:ApiKey) to call them. All of that is an infrastructure problem, not "no
+    // drivers nearby", so say so instead of returning a bare, unexplained 500.
+    private static bool IsDependencyFailure(Exception ex) =>
+        ex is HttpRequestException or InvalidOperationException or TaskCanceledException;
+
     private ObjectResult DependencyUnavailable(Exception ex, string? tripId)
     {
         _logger.LogError(ex, "A service needed to find drivers failed (trip {TripId}): {Message}", tripId, ex.Message);

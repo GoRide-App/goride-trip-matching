@@ -49,20 +49,20 @@ public class DriverOfferService : IDriverOfferService
 {
     private readonly IDriverOfferRepository _offers;
     private readonly ITripEventPublisher _publisher;
-    private readonly IActiveDriversService _activeDrivers;
+    private readonly IDriverProfileLookup _driverProfiles;
     private readonly MatchingOptions _options;
     private readonly ILogger<DriverOfferService> _logger;
 
     public DriverOfferService(
         IDriverOfferRepository offers,
         ITripEventPublisher publisher,
-        IActiveDriversService activeDrivers,
+        IDriverProfileLookup driverProfiles,
         IOptions<MatchingOptions> options,
         ILogger<DriverOfferService> logger)
     {
         _offers = offers;
         _publisher = publisher;
-        _activeDrivers = activeDrivers;
+        _driverProfiles = driverProfiles;
         _options = options.Value;
         _logger = logger;
     }
@@ -117,7 +117,8 @@ public class DriverOfferService : IDriverOfferService
     {
         try
         {
-            var vehicle = await FindVehicleAsync(offer.DriverId);
+            // Vehicle details only enrich the rider's notification, so a failed lookup just leaves them blank.
+            var vehicle = await _driverProfiles.FindAsync(offer.DriverId);
 
             await _publisher.PublishAsync(new TripEvent
             {
@@ -139,21 +140,6 @@ public class DriverOfferService : IDriverOfferService
         {
             _logger.LogError(ex, "Trip {TripId} was accepted by driver {DriverId} but the DRIVER_ACCEPTED event could not be published.",
                 offer.TripId, offer.DriverId);
-        }
-    }
-
-    // Vehicle details only enrich the rider's notification, so a failed lookup just leaves them blank.
-    private async Task<ActiveDriver?> FindVehicleAsync(string driverId)
-    {
-        try
-        {
-            var drivers = await _activeDrivers.GetActiveDriversAsync(null);
-            return drivers.FirstOrDefault(d => d.DriverId == driverId);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Could not look up vehicle details for driver {DriverId}.", driverId);
-            return null;
         }
     }
 }
