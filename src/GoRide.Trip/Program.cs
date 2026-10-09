@@ -29,8 +29,9 @@ builder.Services.AddHttpClient<IActiveDriversService, ActiveDriversService>(clie
     var identityAuthUrl = builder.Configuration["IdentityAuth:BaseUrl"]
         ?? throw new InvalidOperationException("Missing configuration: IdentityAuth:BaseUrl");
     client.BaseAddress = new Uri(identityAuthUrl);
-    // The default is 100s; a hung identity-auth shouldn't hold a ride request that long.
-    client.Timeout = TimeSpan.FromSeconds(5);
+    // The default is 100s; a hung identity-auth shouldn't hold a ride request that long. Its first
+    // driver lookup after a restart (cold start against Azure MySQL) can take over 5s, so allow 15s.
+    client.Timeout = TimeSpan.FromSeconds(15);
 });
 
 // ---- goride-location client (real road-network distance/duration — see Services/LocationClient.cs) ----
