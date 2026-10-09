@@ -17,11 +17,13 @@ public class DriverOfferServiceTests
     private readonly Mock<IDriverOfferRepository> _offers = new();
     private readonly Mock<ITripEventPublisher> _publisher = new();
     private readonly Mock<IActiveDriversService> _activeDrivers = new();
+    private readonly Mock<ITripCompletionNotifier> _completionNotifier = new();
 
     // A real (fresh, empty) cache in front of the mocked identity-auth call, as in production.
     private DriverOfferService CreateService() =>
         new(_offers.Object, _publisher.Object,
             new DriverProfileLookup(_activeDrivers.Object, new MemoryCache(new MemoryCacheOptions()), NullLogger<DriverProfileLookup>.Instance),
+            _completionNotifier.Object,
             Options.Create(new MatchingOptions { OfferTtlSeconds = Ttl }),
             NullLogger<DriverOfferService>.Instance);
 
@@ -266,5 +268,75 @@ public class DriverOfferServiceTests
         Assert.Equal(StatusUpdateOutcome.InvalidTransition, outcome);
         Assert.Null(offer);
         _offers.Verify(o => o.TryAdvanceStatusAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()), Times.Never);
+    }
+
+    // ---- Completion -> payment + TRIP_COMPLETED ----
+
+    private static DriverOffer CompletedTrip(decimal? fare = 725.50m)
+    {
+        var trip = AcceptedOffer();
+        trip.Status = "Completed";
+        trip.Fare = fare;
+        trip.CompletedAt = new DateTime(2026, 9, 20, 10, 25, 0, DateTimeKind.Utc);
+        return trip;
+    }
+
+    [Fact]
+    public async Task UpdateStatus_Completed_TellsPayment_AndQueuesTripCompleted()
+    {
+        var completed = CompletedTrip();
+        _offers.Setup(o => o.TryAdvanceStatusAsync("trip-1", "d1", "InProgress", "Completed")).ReturnsAsync(completed);
+        TripEvent? published = null;
+        _publisher.Setup(p => p.PublishAsync(It.IsAny<TripEvent>()))
+            .Callback<TripEvent>(e => published = e).Returns(Task.CompletedTask);
+
+        var (outcome, _) = await CreateService().UpdateStatusAsync("trip-1", "d1", "Completed");
+
+        Assert.Equal(StatusUpdateOutcome.Updated, outcome);
+        _completionNotifier.Verify(n => n.Enqueue(completed), Times.Once);
+        Assert.Equal("TRIP_COMPLETED", published!.EventType);
+        Assert.Equal("trip-1", published.TripId);
+        Assert.Equal("rider-1", published.RiderId);
+        Assert.Equal("d1", published.DriverId);
+        Assert.Equal(completed.CompletedAt, published.OccurredAt);
+        Assert.Equal(725.50m, published.Payload.Fare);
+        Assert.NotEqual("trip-completed-trip-1", published.EventId);   // payment-service's direct eventId is kept separate
+    }
+
+    [Fact]
+    public async Task UpdateStatus_CompletedWithoutAFare_PublishesNoTripCompleted()
+    {
+        _offers.Setup(o => o.TryAdvanceStatusAsync("trip-1", "d1", "InProgress", "Completed")).ReturnsAsync(CompletedTrip(fare: null));
+
+        var (outcome, _) = await CreateService().UpdateStatusAsync("trip-1", "d1", "Completed");
+
+        Assert.Equal(StatusUpdateOutcome.Updated, outcome);
+        _publisher.Verify(p => p.PublishAsync(It.IsAny<TripEvent>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task UpdateStatus_Completed_StillSucceeds_WhenNotifyingFails()
+    {
+        _offers.Setup(o => o.TryAdvanceStatusAsync("trip-1", "d1", "InProgress", "Completed")).ReturnsAsync(CompletedTrip());
+        _completionNotifier.Setup(n => n.Enqueue(It.IsAny<DriverOffer>())).Throws(new InvalidOperationException("boom"));
+
+        var (outcome, _) = await CreateService().UpdateStatusAsync("trip-1", "d1", "Completed");
+
+        Assert.Equal(StatusUpdateOutcome.Updated, outcome);
+    }
+
+    [Theory]
+    [InlineData("Arrived", "Accepted")]
+    [InlineData("InProgress", "Arrived")]
+    public async Task UpdateStatus_EarlierStages_DoNotTellPayment(string action, string fromStatus)
+    {
+        var updated = AcceptedOffer();
+        updated.Status = action;
+        _offers.Setup(o => o.TryAdvanceStatusAsync("trip-1", "d1", fromStatus, action)).ReturnsAsync(updated);
+
+        await CreateService().UpdateStatusAsync("trip-1", "d1", action);
+
+        _completionNotifier.Verify(n => n.Enqueue(It.IsAny<DriverOffer>()), Times.Never);
+        _publisher.Verify(p => p.PublishAsync(It.IsAny<TripEvent>()), Times.Never);
     }
 }

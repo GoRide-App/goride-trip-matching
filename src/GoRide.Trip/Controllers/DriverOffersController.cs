@@ -112,7 +112,8 @@ public class DriverOffersController : ControllerBase
     /// <summary>
     /// The driver advances their accepted trip one stage: Arrived, then InProgress, then Completed.
     /// 200 with the updated offer; 404 if this driver has no (won) offer for the trip; 409 if the
-    /// requested stage isn't the one immediately after its current status.
+    /// requested stage isn't the one immediately after its current status. Completing a trip also
+    /// tells payment-service (in the background, so not before this responds) so the rider can pay.
     /// </summary>
     [HttpPost("{tripId}/status")]
     [ProducesResponseType(typeof(DriverOffer), StatusCodes.Status200OK)]

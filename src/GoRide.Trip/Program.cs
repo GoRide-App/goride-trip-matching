@@ -42,6 +42,12 @@ builder.Services.AddHttpClient<ILocationClient, LocationClient>(client =>
     client.Timeout = TimeSpan.FromSeconds(8);
 });
 
+// ---- payment-service: told when a trip completes, in the background (see Services/TripCompletionNotifier.cs) ----
+builder.Services.AddHttpClient(TripCompletionNotifier.HttpClientName, client => client.Timeout = TimeSpan.FromSeconds(10));
+builder.Services.AddSingleton<TripCompletionNotifier>();
+builder.Services.AddSingleton<ITripCompletionNotifier>(sp => sp.GetRequiredService<TripCompletionNotifier>());
+builder.Services.AddHostedService(sp => sp.GetRequiredService<TripCompletionNotifier>());
+
 // ---- Kafka producer service (singleton) ----
 builder.Services.AddSingleton<IKafkaProducerService, KafkaProducerService>();  // One shared Kafka connection for the whole app's lifetime, not a new one per request.
 // Request handlers only queue trip events (TripEventPublisher); TripEventSender sends them to the

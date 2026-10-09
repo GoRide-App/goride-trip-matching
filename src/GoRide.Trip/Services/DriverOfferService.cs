@@ -60,6 +60,7 @@ public class DriverOfferService : IDriverOfferService
     private readonly IDriverOfferRepository _offers;
     private readonly ITripEventPublisher _publisher;
     private readonly IDriverProfileLookup _driverProfiles;
+    private readonly ITripCompletionNotifier _completionNotifier;
     private readonly MatchingOptions _options;
     private readonly ILogger<DriverOfferService> _logger;
 
@@ -67,12 +68,14 @@ public class DriverOfferService : IDriverOfferService
         IDriverOfferRepository offers,
         ITripEventPublisher publisher,
         IDriverProfileLookup driverProfiles,
+        ITripCompletionNotifier completionNotifier,
         IOptions<MatchingOptions> options,
         ILogger<DriverOfferService> logger)
     {
         _offers = offers;
         _publisher = publisher;
         _driverProfiles = driverProfiles;
+        _completionNotifier = completionNotifier;
         _options = options.Value;
         _logger = logger;
     }
@@ -120,7 +123,12 @@ public class DriverOfferService : IDriverOfferService
             return (StatusUpdateOutcome.InvalidTransition, null);
 
         var updated = await _offers.TryAdvanceStatusAsync(tripId, driverId, fromStatus, action);
-        if (updated is not null) return (StatusUpdateOutcome.Updated, updated);
+        if (updated is not null)
+        {
+            if (updated.Status == "Completed")
+                await PublishTripCompletedAsync(updated);
+            return (StatusUpdateOutcome.Updated, updated);
+        }
 
         var status = await _offers.GetStatusAsync(tripId, driverId);
         return status is null ? (StatusUpdateOutcome.NotFound, null) : (StatusUpdateOutcome.InvalidTransition, null);
@@ -167,6 +175,45 @@ public class DriverOfferService : IDriverOfferService
         {
             _logger.LogError(ex, "Trip {TripId} was accepted by driver {DriverId} but the DRIVER_ACCEPTED event could not be published.",
                 offer.TripId, offer.DriverId);
+        }
+    }
+
+    // Completing a trip is what makes it payable. Like the accept above, the status change is already
+    // committed, so both notifications are only queued (neither waits on the network) and a failure here
+    // is logged rather than turned into a failed status update.
+    private async Task PublishTripCompletedAsync(DriverOffer trip)
+    {
+        try
+        {
+            // payment-service is told directly (with retries), so the rider can pay.
+            _completionNotifier.Enqueue(trip);
+
+            // goride-payment also reads TRIP_COMPLETED off the events topic and halts on one without a fare,
+            // so a fare-less trip (already logged by the notifier) isn't published there either.
+            if (trip.Fare is null) return;
+
+            // For goride-notification. Deliberately NOT the eventId sent to payment-service directly: that
+            // body has a different payload shape, and payment-service rejects an eventId it has seen with
+            // different data. Same occurredAt and fare, though, so the two are consistent if both arrive.
+            await _publisher.PublishAsync(new TripEvent
+            {
+                EventType = "TRIP_COMPLETED",
+                TripId = trip.TripId,
+                RiderId = trip.RiderId,
+                DriverId = trip.DriverId,
+                OccurredAt = trip.CompletedAt ?? DateTime.UtcNow,
+                Payload = new TripEventPayload
+                {
+                    Fare = trip.Fare,
+                    PickupLocation = trip.PickupLocation,
+                    DropoffLocation = trip.DropoffLocation,
+                },
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Trip {TripId} was completed by driver {DriverId} but TRIP_COMPLETED could not be sent.",
+                trip.TripId, trip.DriverId);
         }
     }
 }
