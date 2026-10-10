@@ -2,6 +2,7 @@ using GoRide.Trip.Data;
 using GoRide.Trip.Events;
 using GoRide.Trip.Models;
 using GoRide.Trip.Services;
+using Prometheus;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -85,10 +86,12 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI();
 }
 
+app.UseRouting();
 app.UseCors("FrontendPolicy");
+app.UseHttpMetrics();
 app.UseAuthorization();
 app.MapControllers();
-
+app.MapMetrics();
 app.Run();
 
 // Exposes the generated Program class so integration tests can spin up this app
