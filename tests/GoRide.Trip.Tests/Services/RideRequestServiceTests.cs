@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Moq;
@@ -19,7 +20,8 @@ public class RideRequestServiceTests
     private readonly List<string> _callOrder = new();
 
     private RideRequestService CreateService() =>
-        new(_matching.Object, _offers.Object, _publisher.Object, _activeDrivers.Object,
+        new(_matching.Object, _offers.Object, _publisher.Object,
+            new DriverProfileLookup(_activeDrivers.Object, new MemoryCache(new MemoryCacheOptions()), NullLogger<DriverProfileLookup>.Instance),
             Options.Create(new MatchingOptions { OfferTtlSeconds = 20 }),
             NullLogger<RideRequestService>.Instance);
 

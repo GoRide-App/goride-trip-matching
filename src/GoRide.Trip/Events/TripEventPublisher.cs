@@ -1,33 +1,52 @@
+using System.Threading.Channels;
 using GoRide.Trip.Models;
 
 namespace GoRide.Trip.Events;
 
 public interface ITripEventPublisher
 {
+    /// <summary>
+    /// Queues the event to be sent to Kafka in the background (see TripEventSender). Returns
+    /// straight away -- it never waits for the broker and never throws.
+    /// </summary>
     Task PublishAsync(TripEvent tripEvent);
 }
 
 /// <summary>
-/// Publishes trip events to the topic goride-notification's consumer subscribes to.
-/// Sits on top of KafkaProducerService so the topic name and message key live in
-/// one place, and so callers can be unit-tested without a real Kafka producer.
+/// Hands trip events to TripEventSender through a bounded in-memory queue. Publishing used to
+/// await the broker inside the HTTP request, so an unreachable Kafka (e.g. Event Hubs' TLS
+/// handshake failing locally) held every ride request and accept for MessageTimeoutMs before
+/// the response went out. Events are notifications on top of the real state in driver_offers,
+/// so if the queue ever fills up, the newest event is dropped with a warning rather than making
+/// a request wait.
 /// </summary>
 public class TripEventPublisher : ITripEventPublisher
 {
-    // Same default as goride-notification's TripEventConsumerService, so both
-    // sides agree even when Kafka:TripEventsTopic isn't configured.
-    private const string DefaultTopic = "goride.trip.events";
+    public const int DefaultCapacity = 1000;
 
-    private readonly KafkaProducerService _producer;
-    private readonly string _topic;
+    private readonly Channel<TripEvent> _queue;
+    private readonly ILogger<TripEventPublisher> _logger;
 
-    public TripEventPublisher(KafkaProducerService producer, IConfiguration config)
+    public TripEventPublisher(ILogger<TripEventPublisher> logger, int capacity = DefaultCapacity)
     {
-        _producer = producer;
-        _topic = config["Kafka:TripEventsTopic"] ?? DefaultTopic;
+        _logger = logger;
+        // FullMode=Wait only matters for WriteAsync; TryWrite (used below) just returns false when full.
+        _queue = Channel.CreateBounded<TripEvent>(new BoundedChannelOptions(capacity)
+        {
+            FullMode = BoundedChannelFullMode.Wait,
+            SingleReader = true,
+        });
     }
 
-    // Keyed by trip so all events for one trip land on one partition, in order.
-    public Task PublishAsync(TripEvent tripEvent) =>
-        _producer.PublishAsync(_topic, tripEvent.TripId, tripEvent);
+    /// <summary>Read by TripEventSender.</summary>
+    public ChannelReader<TripEvent> Reader => _queue.Reader;
+
+    public Task PublishAsync(TripEvent tripEvent)
+    {
+        if (!_queue.Writer.TryWrite(tripEvent))
+            _logger.LogWarning("Trip event queue is full; dropping {EventType} for trip {TripId} (event {EventId}).",
+                tripEvent.EventType, tripEvent.TripId, tripEvent.EventId);
+
+        return Task.CompletedTask;
+    }
 }

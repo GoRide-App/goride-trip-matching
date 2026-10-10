@@ -14,6 +14,9 @@ public enum AcceptOutcome
 
     /// <summary>The offer exists but can no longer be accepted (expired, already decided, or failed).</summary>
     NotAvailable,
+
+    /// <summary>This driver is already on another trip (Accepted, Arrived or InProgress).</summary>
+    DriverBusy,
 }
 
 public enum StatusUpdateOutcome
@@ -43,6 +46,13 @@ public interface IDriverOfferService
     /// is rejected as InvalidTransition.
     /// </summary>
     Task<(StatusUpdateOutcome Outcome, DriverOffer? Offer)> UpdateStatusAsync(string tripId, string driverId, string action);
+
+    /// <summary>
+    /// The trip the driver's app should pick back up after a reload: one still underway (Accepted, Arrived
+    /// or InProgress), or else one Completed within the last few hours (the app checks its payment itself).
+    /// Null when there is none.
+    /// </summary>
+    Task<DriverOffer?> GetCurrentTripAsync(string driverId);
 }
 
 /// <summary>
@@ -52,20 +62,23 @@ public class DriverOfferService : IDriverOfferService
 {
     private readonly IDriverOfferRepository _offers;
     private readonly ITripEventPublisher _publisher;
-    private readonly IActiveDriversService _activeDrivers;
+    private readonly IDriverProfileLookup _driverProfiles;
+    private readonly ITripCompletionNotifier _completionNotifier;
     private readonly MatchingOptions _options;
     private readonly ILogger<DriverOfferService> _logger;
 
     public DriverOfferService(
         IDriverOfferRepository offers,
         ITripEventPublisher publisher,
-        IActiveDriversService activeDrivers,
+        IDriverProfileLookup driverProfiles,
+        ITripCompletionNotifier completionNotifier,
         IOptions<MatchingOptions> options,
         ILogger<DriverOfferService> logger)
     {
         _offers = offers;
         _publisher = publisher;
-        _activeDrivers = activeDrivers;
+        _driverProfiles = driverProfiles;
+        _completionNotifier = completionNotifier;
         _options = options.Value;
         _logger = logger;
     }
@@ -81,6 +94,12 @@ public class DriverOfferService : IDriverOfferService
 
     public async Task<(AcceptOutcome Outcome, DriverOffer? Offer)> AcceptAsync(string tripId, string driverId)
     {
+        // A driver works one trip at a time. Checked before the claim so a busy driver never takes a trip
+        // away from the other drivers it was offered to. (This trip itself is excluded, so retrying an
+        // accept that already went through still gets the usual "no longer available" answer.)
+        if (await _offers.HasActiveTripAsync(driverId, exceptTripId: tripId))
+            return (AcceptOutcome.DriverBusy, null);
+
         var accepted = await _offers.TryAcceptAsync(tripId, driverId, _options.OfferTtlSeconds);
         if (accepted is null)
         {
@@ -104,10 +123,26 @@ public class DriverOfferService : IDriverOfferService
             return (StatusUpdateOutcome.InvalidTransition, null);
 
         var updated = await _offers.TryAdvanceStatusAsync(tripId, driverId, fromStatus, action);
-        if (updated is not null) return (StatusUpdateOutcome.Updated, updated);
+        if (updated is not null)
+        {
+            if (updated.Status == "Completed")
+                await PublishTripCompletedAsync(updated);
+            return (StatusUpdateOutcome.Updated, updated);
+        }
 
         var status = await _offers.GetStatusAsync(tripId, driverId);
         return status is null ? (StatusUpdateOutcome.NotFound, null) : (StatusUpdateOutcome.InvalidTransition, null);
+    }
+
+    // Long enough to cover the app being closed between dropping the rider off and settling payment.
+    private const int RecentlyCompletedHours = 6;
+
+    public async Task<DriverOffer?> GetCurrentTripAsync(string driverId)
+    {
+        var trip = await _offers.GetCurrentTripForDriverAsync(driverId, RecentlyCompletedHours);
+        if (trip is not null)
+            trip.ExpiresAt = trip.CreatedAt.AddSeconds(_options.OfferTtlSeconds);   // same shape accept returns
+        return trip;
     }
 
     // The accept is already committed by the time we get here, and retrying it would
@@ -117,7 +152,8 @@ public class DriverOfferService : IDriverOfferService
     {
         try
         {
-            var vehicle = await FindVehicleAsync(offer.DriverId);
+            // Vehicle details only enrich the rider's notification, so a failed lookup just leaves them blank.
+            var vehicle = await _driverProfiles.FindAsync(offer.DriverId);
 
             await _publisher.PublishAsync(new TripEvent
             {
@@ -142,18 +178,42 @@ public class DriverOfferService : IDriverOfferService
         }
     }
 
-    // Vehicle details only enrich the rider's notification, so a failed lookup just leaves them blank.
-    private async Task<ActiveDriver?> FindVehicleAsync(string driverId)
+    // Completing a trip is what makes it payable. Like the accept above, the status change is already
+    // committed, so both notifications are only queued (neither waits on the network) and a failure here
+    // is logged rather than turned into a failed status update.
+    private async Task PublishTripCompletedAsync(DriverOffer trip)
     {
         try
         {
-            var drivers = await _activeDrivers.GetActiveDriversAsync(null);
-            return drivers.FirstOrDefault(d => d.DriverId == driverId);
+            // payment-service is told directly (with retries), so the rider can pay.
+            _completionNotifier.Enqueue(trip);
+
+            // goride-payment also reads TRIP_COMPLETED off the events topic and halts on one without a fare,
+            // so a fare-less trip (already logged by the notifier) isn't published there either.
+            if (trip.Fare is null) return;
+
+            // For goride-notification. Deliberately NOT the eventId sent to payment-service directly: that
+            // body has a different payload shape, and payment-service rejects an eventId it has seen with
+            // different data. Same occurredAt and fare, though, so the two are consistent if both arrive.
+            await _publisher.PublishAsync(new TripEvent
+            {
+                EventType = "TRIP_COMPLETED",
+                TripId = trip.TripId,
+                RiderId = trip.RiderId,
+                DriverId = trip.DriverId,
+                OccurredAt = trip.CompletedAt ?? DateTime.UtcNow,
+                Payload = new TripEventPayload
+                {
+                    Fare = trip.Fare,
+                    PickupLocation = trip.PickupLocation,
+                    DropoffLocation = trip.DropoffLocation,
+                },
+            });
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Could not look up vehicle details for driver {DriverId}.", driverId);
-            return null;
+            _logger.LogError(ex, "Trip {TripId} was completed by driver {DriverId} but TRIP_COMPLETED could not be sent.",
+                trip.TripId, trip.DriverId);
         }
     }
 }

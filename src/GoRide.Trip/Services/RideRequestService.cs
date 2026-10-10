@@ -27,7 +27,7 @@ public class RideRequestService : IRideRequestService
     private readonly IDriverMatchingService _matching;
     private readonly IDriverOfferRepository _offers;
     private readonly ITripEventPublisher _publisher;
-    private readonly IActiveDriversService _activeDrivers;
+    private readonly IDriverProfileLookup _driverProfiles;
     private readonly MatchingOptions _options;
     private readonly ILogger<RideRequestService> _logger;
 
@@ -35,14 +35,14 @@ public class RideRequestService : IRideRequestService
         IDriverMatchingService matching,
         IDriverOfferRepository offers,
         ITripEventPublisher publisher,
-        IActiveDriversService activeDrivers,
+        IDriverProfileLookup driverProfiles,
         IOptions<MatchingOptions> options,
         ILogger<RideRequestService> logger)
     {
         _matching = matching;
         _offers = offers;
         _publisher = publisher;
-        _activeDrivers = activeDrivers;
+        _driverProfiles = driverProfiles;
         _options = options.Value;
         _logger = logger;
     }
@@ -80,8 +80,9 @@ public class RideRequestService : IRideRequestService
             {
                 TripId = tripId,
                 Status = won.Status,
-                // Vehicle details come from identity-auth; if that's down the rider still learns a driver accepted.
-                Driver = await FindDriverAsync(won.DriverId) ?? new ActiveDriver { DriverId = won.DriverId },
+                // Vehicle details come from identity-auth (cached, since the rider polls this); if that's
+                // down the rider still learns a driver accepted.
+                Driver = await _driverProfiles.FindAsync(won.DriverId) ?? new ActiveDriver { DriverId = won.DriverId },
                 PickupLocation = won.PickupLocation,
                 PickupLat = won.PickupLat,
                 PickupLng = won.PickupLng,
@@ -95,20 +96,6 @@ public class RideRequestService : IRideRequestService
         var now = DateTime.UtcNow;
         var stillOpen = offers.Any(o => o.Status == "Pending" && o.CreatedAt.AddSeconds(_options.OfferTtlSeconds) > now);
         return new RideRequestStatus { TripId = tripId, Status = stillOpen ? "Searching" : "NoDriver" };
-    }
-
-    private async Task<ActiveDriver?> FindDriverAsync(string driverId)
-    {
-        try
-        {
-            var drivers = await _activeDrivers.GetActiveDriversAsync(null);
-            return drivers.FirstOrDefault(d => d.DriverId == driverId);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Could not look up vehicle details for driver {DriverId}.", driverId);
-            return null;
-        }
     }
 
     private async Task OfferToDriverAsync(FindNearbyDriversRequest request, string tripId, string riderId, MatchedDriver driver)
