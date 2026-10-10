@@ -16,6 +16,8 @@ builder.Services.AddScoped<IDriverMatchingService, DriverMatchingService>();
 builder.Services.AddScoped<IDriverOfferRepository, DriverOfferRepository>();
 builder.Services.AddScoped<IRideRequestService, RideRequestService>();
 builder.Services.AddScoped<IDriverOfferService, DriverOfferService>();
+builder.Services.AddScoped<IDriverProfileLookup, DriverProfileLookup>();
+builder.Services.AddMemoryCache();  // Driver vehicle details, so accepts and rider polls don't refetch every driver from identity-auth.
 builder.Services.Configure<MatchingOptions>(builder.Configuration.GetSection(MatchingOptions.SectionName));
 
 // ---- Database (ADO.NET connection factory — see Data/MySqlConnectionFactory.cs) ----
@@ -27,6 +29,9 @@ builder.Services.AddHttpClient<IActiveDriversService, ActiveDriversService>(clie
     var identityAuthUrl = builder.Configuration["IdentityAuth:BaseUrl"]
         ?? throw new InvalidOperationException("Missing configuration: IdentityAuth:BaseUrl");
     client.BaseAddress = new Uri(identityAuthUrl);
+    // The default is 100s; a hung identity-auth shouldn't hold a ride request that long. Its first
+    // driver lookup after a restart (cold start against Azure MySQL) can take over 5s, so allow 15s.
+    client.Timeout = TimeSpan.FromSeconds(15);
 });
 
 // ---- goride-location client (real road-network distance/duration — see Services/LocationClient.cs) ----
@@ -38,9 +43,19 @@ builder.Services.AddHttpClient<ILocationClient, LocationClient>(client =>
     client.Timeout = TimeSpan.FromSeconds(8);
 });
 
+// ---- payment-service: told when a trip completes, in the background (see Services/TripCompletionNotifier.cs) ----
+builder.Services.AddHttpClient(TripCompletionNotifier.HttpClientName, client => client.Timeout = TimeSpan.FromSeconds(10));
+builder.Services.AddSingleton<TripCompletionNotifier>();
+builder.Services.AddSingleton<ITripCompletionNotifier>(sp => sp.GetRequiredService<TripCompletionNotifier>());
+builder.Services.AddHostedService(sp => sp.GetRequiredService<TripCompletionNotifier>());
+
 // ---- Kafka producer service (singleton) ----
-builder.Services.AddSingleton<KafkaProducerService>();  // One shared Kafka connection for the whole app's lifetime, not a new one per request.
-builder.Services.AddSingleton<ITripEventPublisher, TripEventPublisher>();  // Publishes trip events to the topic goride-notification consumes.
+builder.Services.AddSingleton<IKafkaProducerService, KafkaProducerService>();  // One shared Kafka connection for the whole app's lifetime, not a new one per request.
+// Request handlers only queue trip events (TripEventPublisher); TripEventSender sends them to the
+// topic goride-notification consumes, in the background, so no request ever waits on the broker.
+builder.Services.AddSingleton<TripEventPublisher>();
+builder.Services.AddSingleton<ITripEventPublisher>(sp => sp.GetRequiredService<TripEventPublisher>());
+builder.Services.AddHostedService<TripEventSender>();
 
 // ---- CORS: allow the Next.js frontend (local dev + Vercel-hosted) to call this API ----
 var allowedOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>()
