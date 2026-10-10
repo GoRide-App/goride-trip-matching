@@ -10,6 +10,7 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Logging;
 using Moq;
 using Xunit;
 
@@ -137,6 +138,8 @@ public class DriverOffersControllerTests
 
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {
+            // Error-response tests must not depend on access to the host's Windows Event Log.
+            builder.ConfigureLogging(logging => logging.ClearProviders());
             builder.ConfigureServices(services =>
             {
                 var repository = new Mock<IDriverOfferRepository>();
