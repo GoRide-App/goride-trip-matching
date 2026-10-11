@@ -136,9 +136,10 @@ public class DriverOffersControllerTests
 
     private sealed class StoreException() : DbException("private-db-details");
 
-    private sealed class OffersApp : WebApplicationFactory<Program>
+    public sealed class OffersApp : WebApplicationFactory<Program>
     {
         public Mock<IDriverOfferService> Service { get; } = new(MockBehavior.Strict);
+        public Mock<IRideRequestService> Rides { get; } = new(MockBehavior.Strict);
 
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {
@@ -152,6 +153,8 @@ public class DriverOffersControllerTests
                 services.AddSingleton(repository.Object);
                 services.RemoveAll<IDriverOfferService>();
                 services.AddSingleton(Service.Object);
+                services.RemoveAll<IRideRequestService>();
+                services.AddSingleton(Rides.Object);
 
                 // Hosted event delivery must never construct a real Kafka producer in HTTP tests.
                 var producer = new Mock<IKafkaProducerService>(MockBehavior.Strict);

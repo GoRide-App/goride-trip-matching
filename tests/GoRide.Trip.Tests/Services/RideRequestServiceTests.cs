@@ -288,4 +288,36 @@ public class RideRequestServiceTests
         Assert.Equal("Accepted", status!.Status);
         Assert.Equal("d1", status.Driver!.DriverId);
     }
+    [Theory]
+    [InlineData("Cancelled", null, "Cancelled")]
+    [InlineData("Cancelled", "Driver", "DriverCancelled")]
+    [InlineData("Expired", null, "Expired")]
+    public async Task Status_TerminalWinnerOverridesRemainingPendingOffers(string status, string? by, string expected)
+    {
+        _offers.Setup(o => o.GetOffersForTripAsync("trip-1")).ReturnsAsync(new List<DriverOffer>
+        {
+            new() { Status = "Pending", CreatedAt = DateTime.UtcNow },
+            new() { Status = status, CancelledBy = by },
+        });
+        Assert.Equal(expected, (await CreateService().GetStatusAsync("trip-1"))!.Status);
+        _activeDrivers.VerifyNoOtherCalls();
+    }
+
+    [Theory]
+    [InlineData("Cancelled", "Cancelled")]
+    [InlineData("InvalidTransition", "InProgress")]
+    [InlineData("NotFound", null)]
+    public async Task Cancel_ReportsRepositoryOutcome(string outcome, string? status)
+    {
+        _offers.Setup(o => o.CancelRideAsync("trip-1", "rider-1")).ReturnsAsync((outcome, status));
+        Assert.Equal((outcome, status), await CreateService().CancelAsync("trip-1", "rider-1"));
+    }
+
+    [Fact]
+    public async Task Cancel_RejectsInvalidIdsBeforeAccessingStore()
+    {
+        Assert.Equal("InvalidRequest", (await CreateService().CancelAsync("", "rider-1")).Outcome);
+        Assert.Equal("InvalidRequest", (await CreateService().CancelAsync("trip-1", new string('r', 65))).Outcome);
+        _offers.VerifyNoOtherCalls();
+    }
 }

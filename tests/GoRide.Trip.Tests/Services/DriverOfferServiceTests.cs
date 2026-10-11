@@ -249,12 +249,12 @@ public class DriverOfferServiceTests
     {
         // Trying to jump straight to InProgress from Accepted (skipping Arrived).
         _offers.Setup(o => o.TryAdvanceStatusAsync("trip-1", "d1", "Arrived", "InProgress")).ReturnsAsync((DriverOffer?)null);
-        _offers.Setup(o => o.GetStatusAsync("trip-1", "d1")).ReturnsAsync(currentStatus);
+        _offers.Setup(o => o.GetOfferAsync("trip-1", "d1")).ReturnsAsync(new DriverOffer { Status = currentStatus });
 
         var (outcome, offer) = await CreateService().UpdateStatusAsync("trip-1", "d1", "InProgress");
 
-        Assert.Equal(StatusUpdateOutcome.InvalidTransition, outcome);
-        Assert.Null(offer);
+        Assert.Equal(currentStatus == "InProgress" ? StatusUpdateOutcome.Updated : StatusUpdateOutcome.InvalidTransition, outcome);
+        Assert.Equal(currentStatus, offer!.Status);
         _publisher.Verify(p => p.PublishAsync(It.IsAny<TripEvent>()), Times.Never);
     }
 
@@ -311,6 +311,67 @@ public class DriverOfferServiceTests
 
         Assert.Equal(StatusUpdateOutcome.InvalidRequest, outcome);
         _offers.VerifyNoOtherCalls();
+    }
+
+    [Theory]
+    [InlineData("Accepted")]
+    [InlineData("Arrived")]
+    [InlineData("InProgress")]
+    [InlineData("Completed")]
+    public async Task UpdateStatus_SameStage_IsANoOpWithoutDuplicateCompletion(string status)
+    {
+        var current = CompletedTrip();
+        current.Status = status;
+        _offers.Setup(o => o.GetOfferAsync("trip-1", "d1")).ReturnsAsync(current);
+        var (outcome, offer) = await CreateService().UpdateStatusAsync("trip-1", "d1", status);
+        Assert.Equal(StatusUpdateOutcome.Updated, outcome);
+        Assert.Same(current, offer);
+        _completionNotifier.VerifyNoOtherCalls();
+        _publisher.VerifyNoOtherCalls();
+    }
+
+    [Theory]
+    [InlineData(true, "Cancelled")]
+    [InlineData(false, "Declined")]
+    public async Task Decision_ReturnsCommittedOffer(bool cancel, string status)
+    {
+        var current = new DriverOffer { Status = status };
+        _offers.Setup(o => o.TryDriverDecisionAsync("trip-1", "d1", cancel, Ttl)).ReturnsAsync(current);
+        var result = await CreateService().DecideAsync("trip-1", "d1", cancel);
+        Assert.Equal(StatusUpdateOutcome.Updated, result.Outcome);
+        Assert.Same(current, result.Offer);
+        _completionNotifier.VerifyNoOtherCalls();
+    }
+
+    [Theory]
+    [InlineData(true, "InProgress")]
+    [InlineData(true, "Completed")]
+    [InlineData(true, "Expired")]
+    [InlineData(false, "Accepted")]
+    public async Task Decision_ConflictIncludesCurrentOffer(bool cancel, string status)
+    {
+        _offers.Setup(o => o.GetOfferAsync("trip-1", "d1")).ReturnsAsync(new DriverOffer { Status = status });
+        var result = await CreateService().DecideAsync("trip-1", "d1", cancel);
+        Assert.Equal(StatusUpdateOutcome.InvalidTransition, result.Outcome);
+        Assert.Equal(status, result.Offer!.Status);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Decision_MissingOfferAndInvalidIds(bool cancel)
+    {
+        Assert.Equal(StatusUpdateOutcome.NotFound, (await CreateService().DecideAsync("missing", "d1", cancel)).Outcome);
+        _offers.Invocations.Clear();
+        Assert.Equal(StatusUpdateOutcome.InvalidRequest, (await CreateService().DecideAsync(" ", "d1", cancel)).Outcome);
+        _offers.VerifyNoOtherCalls();
+    }
+
+    [Fact]
+    public async Task Accept_ConcurrentAcceptMadeDriverBusy_ReturnsBusy()
+    {
+        _offers.SetupSequence(o => o.HasActiveTripAsync("d1", "trip-1")).ReturnsAsync(false).ReturnsAsync(true);
+        Assert.Equal(AcceptOutcome.DriverBusy, (await CreateService().AcceptAsync("trip-1", "d1")).Outcome);
     }
 
     // ---- Completion -> payment + TRIP_COMPLETED ----

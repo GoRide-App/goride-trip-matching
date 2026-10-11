@@ -16,28 +16,28 @@ public class DriverOfferRepositoryTests(MySqlFixture database) : IClassFixture<M
     public async Task AcceptedRide_CanAdvanceOneStepAtATime_ButCannotRestart()
     {
         var tripId = Guid.NewGuid().ToString();
-        await Repository.CreatePendingAsync(tripId, "driver", "rider", 1,
+        await Repository.CreatePendingAsync(tripId, tripId, "rider", 1,
             "Pickup", null, null, "Dropoff", null, null, 100);
-        Assert.NotNull(await Repository.TryAcceptAsync(tripId, "driver", 60));
+        Assert.NotNull(await Repository.TryAcceptAsync(tripId, tripId, 60));
 
-        Assert.Null(await Repository.TryAdvanceStatusAsync(tripId, "driver", "Arrived", "InProgress"));
-        var arrived = await Repository.TryAdvanceStatusAsync(tripId, "driver", "Accepted", "Arrived");
+        Assert.Null(await Repository.TryAdvanceStatusAsync(tripId, tripId, "Arrived", "InProgress"));
+        var arrived = await Repository.TryAdvanceStatusAsync(tripId, tripId, "Accepted", "Arrived");
         Assert.Equal("Arrived", arrived!.Status);
         Assert.NotNull(arrived.ArrivedAt);
 
-        var started = await Repository.TryAdvanceStatusAsync(tripId, "driver", "Arrived", "InProgress");
+        var started = await Repository.TryAdvanceStatusAsync(tripId, tripId, "Arrived", "InProgress");
         Assert.Equal("InProgress", started!.Status);
         Assert.NotNull(started.StartedAt);
         Assert.Equal(DateTimeKind.Utc, started.StartedAt!.Value.Kind);
         Assert.Equal(arrived.ArrivedAt, started.ArrivedAt);
 
-        var completed = await Repository.TryAdvanceStatusAsync(tripId, "driver", "InProgress", "Completed");
+        var completed = await Repository.TryAdvanceStatusAsync(tripId, tripId, "InProgress", "Completed");
         Assert.Equal("Completed", completed!.Status);
         Assert.NotNull(completed.CompletedAt);
         Assert.Equal(started.StartedAt, completed.StartedAt);
 
-        Assert.Null(await Repository.TryAdvanceStatusAsync(tripId, "driver", "Arrived", "InProgress"));
-        Assert.Null(await Repository.TryAdvanceStatusAsync(tripId, "driver", "Completed", "InProgress"));
+        Assert.Null(await Repository.TryAdvanceStatusAsync(tripId, tripId, "Arrived", "InProgress"));
+        Assert.Null(await Repository.TryAdvanceStatusAsync(tripId, tripId, "Completed", "InProgress"));
         var stored = Assert.Single(await Repository.GetOffersForTripAsync(tripId));
         Assert.Equal("Completed", stored.Status);
         Assert.Equal(completed.CompletedAt, stored.CompletedAt);
@@ -147,7 +147,7 @@ public class DriverOfferRepositoryTests(MySqlFixture database) : IClassFixture<M
                 (trip_id, driver_id, rider_id, status, distance_km, created_at, arrived_at, started_at, completed_at)
             VALUES (@tripId, 'driver', 'rider', @status, 1, UTC_TIMESTAMP(3), @arrived, @started, @completed)
             """;
-        var timestamp = new DateTime(2026, 9, 20, 10, 0, 0, DateTimeKind.Utc);
+        var timestamp = DateTime.UtcNow.AddMinutes(-1);
         command.Parameters.AddWithValue("@tripId", tripId);
         command.Parameters.AddWithValue("@status", status);
         command.Parameters.AddWithValue("@arrived", arrived ? timestamp : (object)DBNull.Value);
