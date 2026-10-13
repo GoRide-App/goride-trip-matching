@@ -61,11 +61,7 @@ public class TripMatchingController : ControllerBase
     [ProducesResponseType(StatusCodes.Status503ServiceUnavailable)]
     public async Task<IActionResult> RequestRide([FromBody] FindNearbyDriversRequest request)
     {
-        if (Validate(request) is { } invalid) return invalid;
-        if (string.IsNullOrWhiteSpace(request.TripId))
-            return BadRequest(new { error = "tripId is required." });
-        if (string.IsNullOrWhiteSpace(request.RiderId))
-            return BadRequest(new { error = "riderId is required." });
+        if (Validate(request, isRideRequest: true) is { } invalid) return invalid;
 
         try
         {
@@ -146,14 +142,27 @@ public class TripMatchingController : ControllerBase
             new { error = "A service needed to find drivers is unavailable right now. Please try again." });
     }
 
-    private IActionResult? Validate(FindNearbyDriversRequest request)
+    private IActionResult? Validate(FindNearbyDriversRequest request, bool isRideRequest = false)
     {
+        if (isRideRequest)
+        {
+            if (string.IsNullOrWhiteSpace(request.PickupLocation))
+                return BadRequest(new { error = "pickupLocation is required." });
+            if (string.IsNullOrWhiteSpace(request.DropoffLocation))
+                return BadRequest(new { error = "dropoffLocation is required." });
+            if (string.IsNullOrWhiteSpace(request.TripId))
+                return BadRequest(new { error = "tripId is required." });
+            if (string.IsNullOrWhiteSpace(request.RiderId))
+                return BadRequest(new { error = "riderId is required." });
+        }
+
         if (string.IsNullOrWhiteSpace(request.VehicleTypeCode))
             return BadRequest(new { error = "vehicleTypeCode is required." });
         if (request.PickupLat is < -90 or > 90)
             return BadRequest(new { error = "pickupLat must be between -90 and 90." });
         if (request.PickupLng is < -180 or > 180)
             return BadRequest(new { error = "pickupLng must be between -180 and 180." });
+
         return null;
     }
 }
