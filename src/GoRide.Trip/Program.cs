@@ -19,6 +19,10 @@ builder.Services.AddScoped<IDriverOfferService, DriverOfferService>();
 builder.Services.AddScoped<IDriverProfileLookup, DriverProfileLookup>();
 builder.Services.AddMemoryCache();  // Driver vehicle details, so accepts and rider polls don't refetch every driver from identity-auth.
 builder.Services.Configure<MatchingOptions>(builder.Configuration.GetSection(MatchingOptions.SectionName));
+builder.Services.AddOptions<TripLifecycleOptions>()
+    .Bind(builder.Configuration.GetSection(TripLifecycleOptions.SectionName))
+    .Validate(o => o.StaleAfterMinutes > 0, "TripLifecycle:StaleAfterMinutes must be positive.")
+    .ValidateOnStart();
 
 // ---- Database (ADO.NET connection factory — see Data/MySqlConnectionFactory.cs) ----
 builder.Services.AddScoped<IDbConnectionFactory, MySqlConnectionFactory>();

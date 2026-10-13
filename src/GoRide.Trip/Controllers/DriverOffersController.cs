@@ -3,7 +3,6 @@ using System.Data.Common;
 using GoRide.Trip.Models;
 using GoRide.Trip.Services;
 using Microsoft.AspNetCore.Mvc;
-using MySqlConnector;
 
 namespace GoRide.Trip.Controllers;
 
@@ -38,7 +37,7 @@ public class DriverOffersController : ControllerBase
         {
             return Ok(await _offerService.GetPendingAsync(driverId));
         }
-        catch (MySqlException ex)
+        catch (Exception ex) when (ex is DbException or TimeoutException)
         {
             _logger.LogError(ex, "Could not load pending offers for driver {DriverId}.", driverId);
             return Unavailable();
@@ -48,7 +47,7 @@ public class DriverOffersController : ControllerBase
     /// <summary>
     /// The driver's current trip, so their app can pick it back up after a reload. 200 with the
     /// same shape accept returns, for a trip that is Accepted, Arrived or InProgress -- or one
-    /// Completed in the last 6 hours (the app checks whether it has been paid); 204 when there's none.
+    /// Completed in the last 6 hours for compatibility (completion never blocks availability); 204 when there's none.
     /// </summary>
     [HttpGet("active")]
     [ProducesResponseType(typeof(DriverOffer), StatusCodes.Status200OK)]
@@ -65,7 +64,7 @@ public class DriverOffersController : ControllerBase
             var trip = await _offerService.GetCurrentTripAsync(driverId);
             return trip is null ? NoContent() : Ok(trip);
         }
-        catch (MySqlException ex)
+        catch (Exception ex) when (ex is DbException or TimeoutException)
         {
             _logger.LogError(ex, "Could not load the current trip for driver {DriverId}.", driverId);
             return Unavailable();
@@ -104,7 +103,7 @@ public class DriverOffersController : ControllerBase
                 _ => Conflict(new { error = "This ride request is no longer available." }),
             };
         }
-        catch (MySqlException ex)
+        catch (Exception ex) when (ex is DbException or TimeoutException)
         {
             _logger.LogError(ex, "Could not accept trip {TripId} for driver {DriverId}.", tripId, request.DriverId);
             return Unavailable();
@@ -114,7 +113,7 @@ public class DriverOffersController : ControllerBase
     /// <summary>
     /// The driver advances their accepted trip one stage: Arrived, then InProgress, then Completed.
     /// 200 with the updated offer; 404 if this driver has no offer for the trip; 409 if the
-    /// requested stage isn't the one immediately after its current status. Completing a trip also
+    /// requested stage is neither the current nor the next stage. Completing a trip also
     /// tells payment-service (in the background, so not before this responds) so the rider can pay.
     /// </summary>
     [HttpPost("{tripId}/status")]
@@ -139,8 +138,8 @@ public class DriverOffersController : ControllerBase
                     "TRIP_NOT_FOUND", "This driver has no offer for that trip."),
                 _ => StatusError(StatusCodes.Status409Conflict, "INVALID_TRIP_TRANSITION",
                     request.Action == "InProgress"
-                        ? "This ride cannot be started. It must have arrived and must not already be started or completed."
-                        : "This trip cannot advance to that status."),
+                        ? "This ride cannot be started from its current status. It must have arrived first."
+                        : "This trip cannot advance to that status.", offer?.Status),
             };
         }
         catch (Exception ex) when (ex is DbException or TimeoutException)
@@ -151,12 +150,41 @@ public class DriverOffersController : ControllerBase
         }
     }
 
-    private ObjectResult StatusError(int status, string code, string error)
+    [HttpPost("{tripId}/cancel")]
+    public Task<IActionResult> Cancel([FromRoute, Required, StringLength(64)] string tripId,
+        [FromBody] DriverDecisionRequest request) => Decide(tripId, request, cancel: true);
+
+    [HttpPost("{tripId}/decline")]
+    public Task<IActionResult> Decline([FromRoute, Required, StringLength(64)] string tripId,
+        [FromBody] DriverDecisionRequest request) => Decide(tripId, request, cancel: false);
+
+    private async Task<IActionResult> Decide(string tripId, DriverDecisionRequest request, bool cancel)
+    {
+        try
+        {
+            var (outcome, offer) = await _offerService.DecideAsync(tripId, request.DriverId, cancel);
+            return outcome switch
+            {
+                StatusUpdateOutcome.Updated => Ok(offer),
+                StatusUpdateOutcome.InvalidRequest => StatusError(400, "INVALID_REQUEST", "tripId and driverId are required and must not exceed 64 characters."),
+                StatusUpdateOutcome.NotFound => StatusError(404, "TRIP_NOT_FOUND", "This driver has no offer for that trip."),
+                _ => StatusError(409, "INVALID_TRIP_TRANSITION", "This trip cannot be cancelled or declined at its current stage.", offer?.Status),
+            };
+        }
+        catch (Exception ex) when (ex is DbException or TimeoutException)
+        {
+            _logger.LogError(ex, "Could not decide offer for trip {TripId}.", tripId);
+            return Unavailable();
+        }
+    }
+
+    private ObjectResult StatusError(int status, string code, string error, string? currentStatus = null)
     {
         var problem = new ProblemDetails { Status = status, Title = error };
         problem.Extensions["code"] = code;
         // Keep the existing error property for clients that already display it.
         problem.Extensions["error"] = error;
+        if (status == 409) problem.Extensions["currentStatus"] = currentStatus;
         return StatusCode(status, problem);
     }
 

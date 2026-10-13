@@ -42,17 +42,18 @@ public interface IDriverOfferService
 
     /// <summary>
     /// Advances the trip through its post-acceptance stages one at a time: Accepted -> Arrived ->
-    /// InProgress -> Completed. Each call must name the very next stage; skipping or going backwards
+    /// InProgress -> Completed. The current stage is an idempotent no-op; skipping or going backwards
     /// is rejected as InvalidTransition.
     /// </summary>
     Task<(StatusUpdateOutcome Outcome, DriverOffer? Offer)> UpdateStatusAsync(string tripId, string driverId, string action);
 
     /// <summary>
     /// The trip the driver's app should pick back up after a reload: one still underway (Accepted, Arrived
-    /// or InProgress), or else one Completed within the last few hours (the app checks its payment itself).
+    /// or InProgress), or else one Completed within the last few hours for compatibility. Completion never blocks availability.
     /// Null when there is none.
     /// </summary>
     Task<DriverOffer?> GetCurrentTripAsync(string driverId);
+    Task<(StatusUpdateOutcome Outcome, DriverOffer? Offer)> DecideAsync(string tripId, string driverId, bool cancel);
 }
 
 /// <summary>
@@ -103,6 +104,8 @@ public class DriverOfferService : IDriverOfferService
         var accepted = await _offers.TryAcceptAsync(tripId, driverId, _options.OfferTtlSeconds);
         if (accepted is null)
         {
+            if (await _offers.HasActiveTripAsync(driverId, exceptTripId: tripId))
+                return (AcceptOutcome.DriverBusy, null);
             // Only reached on failure, so the extra lookup costs nothing on the happy path.
             var status = await _offers.GetStatusAsync(tripId, driverId);
             return status is null ? (AcceptOutcome.NotFound, null) : (AcceptOutcome.NotAvailable, null);
@@ -119,10 +122,10 @@ public class DriverOfferService : IDriverOfferService
             return (StatusUpdateOutcome.InvalidRequest, null);
 
         var fromStatus = TripStatusFlow.PreviousStatus(action);
-        if (fromStatus is null)
+        if (fromStatus is null && action != "Accepted")
             return (StatusUpdateOutcome.InvalidTransition, null);
 
-        var updated = await _offers.TryAdvanceStatusAsync(tripId, driverId, fromStatus, action);
+        var updated = fromStatus is null ? null : await _offers.TryAdvanceStatusAsync(tripId, driverId, fromStatus, action);
         if (updated is not null)
         {
             if (updated.Status == "Completed")
@@ -130,11 +133,23 @@ public class DriverOfferService : IDriverOfferService
             return (StatusUpdateOutcome.Updated, updated);
         }
 
-        var status = await _offers.GetStatusAsync(tripId, driverId);
-        return status is null ? (StatusUpdateOutcome.NotFound, null) : (StatusUpdateOutcome.InvalidTransition, null);
+        var current = await _offers.GetOfferAsync(tripId, driverId);
+        if (current is null) return (StatusUpdateOutcome.NotFound, null);
+        // Retries return the authoritative snapshot without changing timestamps or notifying twice.
+        return (current.Status == action ? StatusUpdateOutcome.Updated : StatusUpdateOutcome.InvalidTransition, current);
     }
 
-    // Long enough to cover the app being closed between dropping the rider off and settling payment.
+    public async Task<(StatusUpdateOutcome Outcome, DriverOffer? Offer)> DecideAsync(string tripId, string driverId, bool cancel)
+    {
+        if (!TripStatusFlow.IsValidId(tripId) || !TripStatusFlow.IsValidId(driverId))
+            return (StatusUpdateOutcome.InvalidRequest, null);
+        var updated = await _offers.TryDriverDecisionAsync(tripId, driverId, cancel, _options.OfferTtlSeconds);
+        if (updated is not null) return (StatusUpdateOutcome.Updated, updated);
+        var current = await _offers.GetOfferAsync(tripId, driverId);
+        return current is null ? (StatusUpdateOutcome.NotFound, null) : (StatusUpdateOutcome.InvalidTransition, current);
+    }
+
+    // Retain the existing completed-trip read window; it never makes the driver busy.
     private const int RecentlyCompletedHours = 6;
 
     public async Task<DriverOffer?> GetCurrentTripAsync(string driverId)

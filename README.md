@@ -2,6 +2,50 @@
 
 This is the **Codebase Structure** for GoRide-trip_matching backend microservice.
 
+## Ride lifecycle synchronization
+
+Driver stages are `Accepted -> Arrived -> InProgress -> Completed`. Repeating the
+current stage returns the current offer without changing timestamps or repeating
+completion notifications. A driver is busy only during the first three stages;
+completion frees them immediately, independently of payment.
+
+| Method and path | Body | Responses |
+| --- | --- | --- |
+| `POST /matching/offers/{tripId}/status` | `{ "driverId": "...", "action": "Arrived" }` | 200 offer for next/current stage; 409 `INVALID_TRIP_TRANSITION` with `currentStatus`; 404 absent offer; 400 validation |
+| `POST /matching/offers/{tripId}/cancel` | `{ "driverId": "...", "reason": "optional" }` | 200 offer with `status: Cancelled`, `cancelledBy: Driver`; allowed only from Accepted/Arrived, including repeat cancellation; 409 invalid stage; 404 absent/unowned offer |
+| `POST /matching/offers/{tripId}/decline` | `{ "driverId": "..." }` | 200 Declined offer for a live Pending offer or repeat decline; 409 unavailable; 404 absent/unowned offer |
+| `POST /matching/ride-requests/{tripId}/cancel` | `{ "riderId": "..." }` | 200 `{ tripId, status: "Cancelled" }` before start or on repeat cancellation; 409 after start/expiry/driver cancellation with `currentStatus`; 404 absent/unowned request |
+| `GET /matching/offers/active?driverId=...` | none | 200 current offer, otherwise a recently completed offer (existing six-hour compatibility window); 204 when neither exists. Cancelled/Expired offers are excluded |
+| `GET /matching/ride-requests/{tripId}` | none | 200 status: Searching, NoDriver, Accepted, Arrived, InProgress, Completed, Cancelled, DriverCancelled, or Expired; 404 unknown trip |
+
+All mutation endpoints validate identifiers (required, at most 64 characters);
+store failures return 503. Cancel/decline conflicts use `INVALID_TRIP_TRANSITION`
+and `currentStatus`. The cancellation reason is accepted (at most 500 characters)
+but is not persisted. Status action `Accepted` only supports a same-stage no-op.
+
+`TripLifecycle:StaleAfterMinutes` defaults to **120**; environment variable
+`TripLifecycle__StaleAfterMinutes` must be positive. Accepted/Arrived offers expire
+at read time and before mutations, using `arrived_at`, then `decided_at`, then
+`created_at`. Reads and duplicate actions do not extend this window. InProgress
+and Completed never expire through this rule. Conditional updates protect races
+with starting the trip.
+
+Acceptance checks driver availability under a MySQL advisory driver lock and
+claims the trip in one transaction; a trip lock also serializes acceptance,
+cancellation and offer creation across service instances. The first valid accept
+wins and one driver can hold one active trip. Re-delivery cannot reset an offer's
+stage or timestamps. Retry a finished/failed search with a **new trip ID**.
+
+**No schema change or migration is required.** Existing VARCHAR status values and
+lifecycle timestamps are used. Driver cancellation is stored as `DriverCancelled`
+and exposed as a Cancelled offer with `cancelledBy: Driver`; rider polling reports
+DriverCancelled. Startup no longer attempts DDL. Existing tables must be provisioned
+by an administrator using the existing SQL scripts; `trip_svc` needs no CREATE/ALTER.
+
+Run `dotnet build GoRide.Trip.sln -c Release` and `dotnet test GoRide.Trip.sln -c Release`.
+Repository race/expiry tests opt in through `SCRUM83_MYSQL`, pointing only at a
+disposable MySQL instance. Each fixture creates and drops its own generated database.
+
 SCRUM-83 ride-start rules, API errors, and test instructions are documented in
 [docs/SCRUM-83.md](docs/SCRUM-83.md).
 

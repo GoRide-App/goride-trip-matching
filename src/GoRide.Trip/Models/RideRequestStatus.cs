@@ -8,6 +8,7 @@ public class RideRequestStatus
     /// <summary>
     /// "Searching" (an offer is still open), "NoDriver" (every offer lapsed or failed), or one of
     /// the accepted driver's trip stages: "Accepted", "Arrived", "InProgress", "Completed".
+    /// Terminal outcomes are "Cancelled", "DriverCancelled", and "Expired".
     /// </summary>
     public string Status { get; set; } = string.Empty;
 

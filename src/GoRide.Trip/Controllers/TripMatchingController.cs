@@ -1,3 +1,5 @@
+using System.ComponentModel.DataAnnotations;
+using System.Data.Common;
 using GoRide.Trip.Models;
 using GoRide.Trip.Services;
 using Microsoft.AspNetCore.Mvc;
@@ -105,6 +107,28 @@ public class TripMatchingController : ControllerBase
             _logger.LogError(ex, "Could not load ride request status for trip {TripId}.", tripId);
             return StatusCode(StatusCodes.Status503ServiceUnavailable,
                 new { error = "Could not reach the offers store right now. Please try again." });
+        }
+    }
+
+    [HttpPost("ride-requests/{tripId}/cancel")]
+    public async Task<IActionResult> CancelRide([FromRoute, Required, StringLength(64)] string tripId,
+        [FromBody] CancelRideRequest request)
+    {
+        try
+        {
+            var (outcome, currentStatus) = await _rideRequestService.CancelAsync(tripId, request.RiderId);
+            return outcome switch
+            {
+                "Cancelled" => Ok(new RideRequestStatus { TripId = tripId, Status = "Cancelled" }),
+                "InvalidRequest" => BadRequest(new { error = "tripId and riderId are required and must not exceed 64 characters." }),
+                "NotFound" => NotFound(new { error = "No ride request found for this rider and trip." }),
+                _ => Conflict(new { code = "INVALID_TRIP_TRANSITION", error = "This ride can only be cancelled before it starts.", currentStatus }),
+            };
+        }
+        catch (Exception ex) when (ex is DbException or TimeoutException)
+        {
+            _logger.LogError(ex, "Could not cancel ride request {TripId}.", tripId);
+            return StatusCode(503, new { error = "Could not reach the offers store right now. Please try again." });
         }
     }
 

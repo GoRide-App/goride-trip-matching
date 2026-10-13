@@ -12,6 +12,7 @@ public interface IRideRequestService
 
     /// <summary>Where a delivered request stands, or null when nothing was ever offered for this trip.</summary>
     Task<RideRequestStatus?> GetStatusAsync(string tripId);
+    Task<(string Outcome, string? CurrentStatus)> CancelAsync(string tripId, string riderId);
 }
 
 /// <summary>
@@ -53,7 +54,7 @@ public class RideRequestService : IRideRequestService
         var riderId = request.RiderId!;
 
         if (await _offers.HasAcceptedOfferAsync(tripId))
-            return (null, "This trip already has an accepted driver.");
+            return (null, "This trip is already assigned or closed. Request a new trip.");
 
         var search = await _matching.FindNearbyDriversAsync(request);
         if (!search.Matched)
@@ -68,10 +69,19 @@ public class RideRequestService : IRideRequestService
 
     private static readonly HashSet<string> WonStatuses = new() { "Accepted", "Arrived", "InProgress", "Completed" };
 
+    public Task<(string Outcome, string? CurrentStatus)> CancelAsync(string tripId, string riderId) =>
+        !TripStatusFlow.IsValidId(tripId) || !TripStatusFlow.IsValidId(riderId)
+            ? Task.FromResult<(string, string?)>(("InvalidRequest", null))
+            : _offers.CancelRideAsync(tripId, riderId);
+
     public async Task<RideRequestStatus?> GetStatusAsync(string tripId)
     {
         var offers = await _offers.GetOffersForTripAsync(tripId);
         if (offers.Count == 0) return null;
+
+        var ended = offers.FirstOrDefault(o => o.Status is "Cancelled" or "Expired");
+        if (ended is not null)
+            return new RideRequestStatus { TripId = tripId, Status = ended.CancelledBy == "Driver" ? "DriverCancelled" : ended.Status };
 
         var won = offers.FirstOrDefault(o => WonStatuses.Contains(o.Status));
         if (won is not null)

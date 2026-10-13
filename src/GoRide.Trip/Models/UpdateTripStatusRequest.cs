@@ -8,8 +8,8 @@ public class UpdateTripStatusRequest
     [StringLength(64)]
     public string DriverId { get; set; } = string.Empty;
 
-    /// <summary>"Arrived", "InProgress", or "Completed" -- one step at a time, in that order.</summary>
+    /// <summary>Next/current stage: Accepted (no-op only), Arrived, InProgress, or Completed.</summary>
     [Required]
-    [RegularExpression("^(Arrived|InProgress|Completed)$", ErrorMessage = "action must be one of: Arrived, InProgress, Completed.")]
+    [RegularExpression("^(Accepted|Arrived|InProgress|Completed)$", ErrorMessage = "action must be one of: Accepted, Arrived, InProgress, Completed.")]
     public string Action { get; set; } = string.Empty;
 }
