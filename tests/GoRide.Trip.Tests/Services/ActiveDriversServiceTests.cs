@@ -72,10 +72,15 @@ public class ActiveDriversServiceTests
         Assert.Equal("CAB-1", d.VehiclePlate);
     }
 
-    [Fact]
-    public async Task WhenIdentityRejectsTheCall_ItThrows_SoTheFailureIsNotMistakenForNoDrivers()
+    [Theory]
+    [InlineData(HttpStatusCode.Unauthorized)]
+    [InlineData(HttpStatusCode.Forbidden)]
+    [InlineData(HttpStatusCode.NotFound)]
+    [InlineData(HttpStatusCode.InternalServerError)]
+    [InlineData(HttpStatusCode.ServiceUnavailable)]
+    public async Task WhenIdentityFailsTheCall_ItThrows_SoTheFailureIsNotMistakenForNoDrivers(HttpStatusCode status)
     {
-        var (service, _) = Create(HttpStatusCode.Unauthorized);
+        var (service, _) = Create(status);
 
         await Assert.ThrowsAsync<HttpRequestException>(() => service.GetActiveDriversAsync("TUK"));
     }

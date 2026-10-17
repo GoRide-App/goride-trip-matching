@@ -88,17 +88,22 @@ public class DriverMatchingServiceTests
         Assert.InRange(result.Drivers[2].DistanceKm, 2.0, 2.5);    // ~2.22 km
     }
 
-    [Fact]
-    public async Task Result_IsCappedAtMaxDrivers_KeepingTheNearest()
+    [Theory]
+    [InlineData(1, "b")]
+    [InlineData(2, "b,c")]
+    [InlineData(3, "b,c,a")]
+    [InlineData(10, "b,c,a")]   // a cap above the number of matches changes nothing
+    public async Task Result_IsCappedAtMaxDrivers_KeepingTheNearest(int maxDrivers, string expectedIds)
     {
+        // b is nearest, then c, then a.
         var service = CreateService(
             new() { Nearby("a", 0.03), Nearby("b", 0.01), Nearby("c", 0.02) },
             new() { Vehicle("a"), Vehicle("b"), Vehicle("c") },
-            maxDrivers: 2);
+            maxDrivers);
 
         var result = await service.FindNearbyDriversAsync(Request());
 
-        Assert.Equal(new[] { "b", "c" }, result.Drivers.Select(d => d.DriverId));
+        Assert.Equal(expectedIds.Split(','), result.Drivers.Select(d => d.DriverId));
     }
 
     [Fact]
