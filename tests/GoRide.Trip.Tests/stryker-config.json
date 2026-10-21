@@ -1,0 +1,17 @@
+{
+  "stryker-config": {
+    "mutate": [
+      "**/Services/FareCalculationService.cs"
+    ],
+    "reporters": [
+      "ClearText",
+      "Html",
+      "Json"
+    ],
+    "thresholds": {
+      "high": 85,
+      "low": 60,
+      "break": 50
+    }
+  }
+}
