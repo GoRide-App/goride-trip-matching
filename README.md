@@ -193,6 +193,47 @@ Once the existing violations are cleaned up we'll remove `continue-on-error` fro
 `Cors:AllowedOrigins` in `appsettings.json` lists which frontend URLs may call this API. Locally that's `http://localhost:3000` (Next.js dev server); in production it's your Vercel deployment URL. Update the placeholder once your frontend actually has a Vercel URL — until then, local development works fine with just `localhost:3000`.
 
 
+---
+
+## Mutation Testing
+
+Mutation testing is implemented with [Stryker.NET](https://stryker-mutator.io/docs/stryker-net/introduction/) and
+targets the four services that contain the most mutation-vulnerable domain logic.
+
+### Targeted services
+
+| Service | Key mutants targeted |
+|---|---|
+| `FareCalculationService` | Haversine arithmetic (`sin→cos`, `*→+`, `1−a→1+a`), fare formula operators, rounding precision |
+| `DriverMatchingService` | Haversine (independent copy), `>0` → `>=0` on `Matched` flag, `OrderBy` → `OrderByDescending`, `Take` cap removal |
+| `TripCompletionNotifier` | `>=` retry boundary, `>= 500` HTTP status gate, `IsSuccessStatusCode` flip, `IsNullOrWhiteSpace` guard |
+| `DriverProfileLookup` | Cache hit early-return removal, `FoundFor`↔`MissingFor` TTL swap, `DistinctBy` removal, `==`→`!=` in `FirstOrDefault` |
+
+### Quality thresholds (`stryker-config.json`)
+
+| Level | Mutation score |
+|---|---|
+| 🟢 High | ≥ 85 % |
+| 🟡 Low (warning) | ≥ 60 % |
+| 🔴 Break (fail) | < 50 % |
+
+### Running locally
+
+```powershell
+# From the repo root:
+.\run-mutation-tests.ps1              # console + HTML + JSON report
+.\run-mutation-tests.ps1 -OpenReport  # same, then auto-opens the HTML dashboard
+```
+
+Reports are written to `tests/GoRide.Trip.Tests/StrykerOutput/`.
+
+### Running in CI
+
+The `ci-reusable.yml` pipeline runs Stryker automatically after the unit-test step and
+uploads `mutation-report.html` + `mutation-report.json` as a workflow artifact (retained 14 days).
+
+**Owner:** *Sooriyabandara D.M.L.P.*
+
 ---------------------------------------------------
 QA Testings
 ---------------------------------------------------

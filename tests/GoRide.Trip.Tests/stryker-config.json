@@ -1,7 +1,10 @@
 {
   "stryker-config": {
     "mutate": [
-      "**/Services/FareCalculationService.cs"
+      "**/Services/FareCalculationService.cs",
+      "**/Services/DriverMatchingService.cs",
+      "**/Services/TripCompletionNotifier.cs",
+      "**/Services/DriverProfileLookup.cs"
     ],
     "reporters": [
       "ClearText",
