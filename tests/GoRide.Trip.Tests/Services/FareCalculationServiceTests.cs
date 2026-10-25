@@ -60,16 +60,20 @@ public class FareCalculationServiceTests
     }
 
     [Theory]
-    [InlineData("CAR", 1000)]   // 300 + 5 km x 120 + 10 min x 10
-    [InlineData("BIKE", 400)]   // 100 + 5 km x 50  + 10 min x 5
-    [InlineData("XL", 1550)]    // 500 + 5 km x 180 + 10 min x 15
-    public async Task VehicleTypesMissingFromTheRepo_AreAddedAsDisplayOnlyWithTheirOwnRates(string code, double expectedFare)
+    [InlineData("CAR", 1000, "vt_car")]   // 300 + 5 km x 120 + 10 min x 10
+    [InlineData("BIKE", 400, "vt_bike")]   // 100 + 5 km x 50  + 10 min x 5
+    [InlineData("XL", 1550, "vt_xl")]    // 500 + 5 km x 180 + 10 min x 15
+    public async Task VehicleTypesMissingFromTheRepo_AreAddedAsDisplayOnlyWithTheirOwnRates(string code, double expectedFare, string expectedId)
     {
         var result = await Estimate(Repository(), LocationClient((DistanceKm: 5, DurationMinutes: 10)));
 
         var option = result.Single(o => o.VehicleTypeCode == code);
         Assert.False(option.Available);
         Assert.Equal((decimal)expectedFare, option.Fare);
+        // Explicitly assert metadata to kill string/value mutants in fallback definitions
+        Assert.Equal(expectedId, option.VehicleTypeId);
+        Assert.Equal(5.0, option.DistanceKm);
+        Assert.Equal(10.0, option.EstimatedDurationMinutes);
     }
 
     [Theory]
@@ -120,9 +124,26 @@ public class FareCalculationServiceTests
         var result = await Estimate(Repository(Vehicle("TUKTUK")), LocationClient(null));
 
         var tukTuk = TukTuk(result);
-        Assert.InRange(tukTuk.DistanceKm, 4.5, 5.5);
-        // The fallback assumes a 25 km/h average speed, so ~5 km is roughly 12 minutes.
-        Assert.InRange(tukTuk.EstimatedDurationMinutes, 11, 14);
+        // Colombo Fort (6.9344, 79.8428) -> Bambalapitiya (6.8905, 79.8565)
+        // Exact Haversine distance is 5.11 km; at 25 km/h fallback speed: (5.11 / 25) * 60 = 12.3 minutes.
+        // Asserting exact rounded results kills arithmetic mutators (+ to -, * to /, 1-a to 1+a)
+        Assert.Equal(5.11, tukTuk.DistanceKm);
+        Assert.Equal(12.3, tukTuk.EstimatedDurationMinutes);
+    }
+
+    [Theory]
+    [InlineData(6.9344, 79.8428, 6.8905, 79.8565, 5.11)]   // Colombo Fort to Bambalapitiya
+    [InlineData(6.9271, 79.8612, 6.9147, 79.8731, 1.90)]   // Town Hall to Borella
+    [InlineData(6.0000, 80.0000, 7.0000, 80.0000, 111.19)] // 1 degree latitude difference (~111.19 km)
+    public async Task FallbackHaversineFormula_CalculatesPreciseGreatCircleDistance(
+        double lat1, double lng1, double lat2, double lng2, double expectedKm)
+    {
+        // Parameterized precision test specifically designed to kill arithmetic formula mutants
+        var result = await new FareCalculationService(Repository(Vehicle("TUKTUK")).Object, LocationClient(null).Object)
+            .EstimateFaresAsync((decimal)lat1, (decimal)lng1, (decimal)lat2, (decimal)lng2);
+
+        var tukTuk = TukTuk(result);
+        Assert.Equal(expectedKm, tukTuk.DistanceKm);
     }
 
     [Fact]
