@@ -75,7 +75,6 @@ GoRide.ServiceTemplate/
 └── GoRide.ServiceTemplate.sln
 ```
 
-## How to turn this into a real service (do this once, per microservice)
 
 Say you're creating `goride-location` from this template:
 
