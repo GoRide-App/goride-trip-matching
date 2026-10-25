@@ -34,6 +34,11 @@ public class MySqlConnectionFactory : IDbConnectionFactory
                     "Missing configuration: Db:Password (set it in appsettings.Development.json locally, " +
                     "or as the Db__Password environment variable in Docker/Azure)"),
             SslMode = Enum.Parse<MySqlSslMode>(sslModeRaw, ignoreCase: true),
+            // vehicle_types.id (and other string-keyed columns) are CHAR(36) but hold
+            // plain string ids like "vt_tuk", not GUIDs — MySqlConnector's default
+            // GuidFormat.Char36 tries to parse any CHAR(36) value as a Guid and throws
+            // FormatException for non-GUID strings. Disable that auto-detection.
+            GuidFormat = MySqlGuidFormat.None,
         };
 
         _connectionString = csBuilder.ConnectionString;

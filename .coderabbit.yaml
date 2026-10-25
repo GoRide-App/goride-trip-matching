@@ -1,0 +1,27 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+# CodeRabbit reviews every PR automatically. By default it only looks at PRs into
+# the default branch (main) — base_branches adds dev, which is where our PRs go.
+language: "en-US"
+
+reviews:
+  profile: "chill"
+  request_changes_workflow: false
+  high_level_summary: true
+  auto_review:
+    enabled: true
+    drafts: false
+    base_branches:
+      - "dev"
+  path_instructions:
+    - path: "src/**/Data/**"
+      instructions: >-
+        ADO.NET only, no ORM. Every query must use MySqlCommand parameters —
+        flag any SQL built with string concatenation or interpolation.
+    - path: "src/**/Controllers/**"
+      instructions: >-
+        Controllers handle HTTP only (validation, status codes). Business logic
+        belongs in Services — flag logic that should move.
+    - path: "tests/**"
+      instructions: >-
+        xUnit + Moq. Check that tests assert real behaviour and cover edge
+        cases, not just that the code runs without throwing.

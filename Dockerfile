@@ -6,7 +6,7 @@ WORKDIR /src
 # Copy just the project file first so Docker caches "dotnet restore" and only
 # re-runs it when dependencies actually change, not on every code edit.
 COPY src/GoRide.Trip/GoRide.Trip.csproj src/GoRide.Trip/
-RUN dotnet restore src/GoRide.Trip/GoRide.Trip.csproj
+RUN dotnet restore src/GoRide.Trip/GoRide.Trip.csproj -r linux-x64
 
 COPY src/GoRide.Trip/ src/GoRide.Trip/
 WORKDIR /src/src/GoRide.Trip
